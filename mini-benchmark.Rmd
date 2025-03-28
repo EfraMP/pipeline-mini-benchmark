@@ -1,0 +1,316 @@
+---
+title: "Mini-benchmark"
+author: "Alejandro Efraín Marín Peralta"
+date: "`r Sys.Date()`"
+output:
+  html_document:
+    toc: true
+    toc_float:
+      toc_collapsed: true
+    toc_depth: 3
+    number_sections: true
+    theme: lumen
+  pdf_document:
+    toc: true
+    toc_depth: '3'
+---
+
+
+```{r libraries, message=FALSE, warning=FALSE}
+library(tidyverse)
+library(arrow)
+library(readr)
+library(magrittr)
+library(eulerr)
+#library(mlr3measures)
+#library(units)
+library(lubridate)
+library(UpSetR)
+```
+
+
+```{r data_load}
+setwd("~/Documents/EMBL_UniHD/pipeline_res")
+
+msconvert_diannv1.9.2 <- open_dataset("./sc_minibm_good_fasta/msconvert_diannv1.9.2/msconvert_diannv1.9.2/report.parquet",
+                                      format = "parquet")
+
+
+thermoraw_diannv1.9.2 <- open_dataset("./sc_minibm_good_fasta/thermoraw_diannv1.9.2/thermoraw_diannv1.9.2/report.parquet", format = "parquet")
+
+
+msconvert_diannv2.0 <- open_dataset("./sc_minibm_good_fasta/msconvert_diannv2.0/msconvert_diannv2.0/report.parquet",
+                                    format = "parquet")
+
+thermoraw_diannv2.0 <- open_dataset("./sc_minibm_good_fasta/thermoraw_diannv2.0/thermoraw_diannv2.0/report.parquet",
+                                    format = "parquet")
+
+msconvert_diannv2.0.1 <- open_dataset("./sc_minibm_good_fasta/msconvert_diannv2.0.1/msconvert_diannv2.0.1/report.parquet",
+                                    format = "parquet")
+
+thermoraw_diannv2.0.1 <- open_dataset("./sc_minibm_good_fasta/thermoraw_diannv2.0.1/thermoraw_diannv2.0.1/report.parquet",
+                                    format = "parquet")
+
+msconvert_diannv2.0.2 <- open_dataset("./sc_minibm_good_fasta/msconvert_diannv2.0.2/msconvert_diannv2.0.2/report.parquet",
+                                    format = "parquet")
+
+thermoraw_diannv2.0.2 <- open_dataset("./sc_minibm_good_fasta/thermoraw_diannv2.0.2/thermoraw_diannv2.0.2/report.parquet",
+                                    format = "parquet")
+
+parquets <- c(
+  "msconvert_diannv2.0",
+  "thermoraw_diannv2.0",
+  "msconvert_diannv2.0.1",
+  "thermoraw_diannv2.0.1",
+  "msconvert_diannv2.0.2",
+  "thermoraw_diannv2.0.2"
+)
+
+## TSVs and parquets
+all_runs <- c(
+  "msconvert_diannv1.9.2",
+  "thermoraw_diannv1.9.2",
+  parquets
+)
+
+```
+
+
+```{r functions}
+# Auxiliary functions
+
+## Get protein groups from parquet DIA-NN output
+pg <- function(x) {
+  x %>% 
+    collect() %>% 
+    pull(Protein.Group) %>% 
+    unique()
+}
+
+
+## Get proteins from parquet DIA-NN output
+proteins <- function(x) {
+  x %>% 
+    collect() %>% 
+    pull(Protein.Ids) %>% 
+    unique()
+}
+
+## Get peptides from parquet DIA-NN output
+peptides <- function(x) {
+  x %>% 
+    collect() %>% 
+    pull(Stripped.Sequence) %>% 
+    unique()
+}
+
+
+### Function to convert units to MB
+get_MB <- function(x) {
+  ## Trim whitespace
+  x %<>% as.character() %>% 
+    trimws()
+  
+  ## Gets numeric value
+  val <- str_extract(x, "[0-9]+(\\.[0-9]+)?") %>% 
+    as.numeric()
+  
+  ## Gets unit
+  unit <- str_extract(x, "[A-Za-z]+") %>% 
+    toupper()
+  
+  ## Gets MB
+  value_mb = case_when(
+    unit == "KB" ~ val / 1024,
+    unit == "MB" ~ val,
+    unit == "GB" ~ val * 1024,
+    TRUE ~ NA_real_
+  )
+  
+  ## Return megabytes
+  return(value_mb)
+}
+
+
+## Time units
+get_seconds <- function(x) {
+  x %<>% as.character()
+  
+  ## Gets time with regex
+  h <- x %>% 
+    str_extract(., "\\d+(?=h)") %>% 
+    as.numeric()
+  m <- x %>% 
+    str_extract(., "\\d+(?=m)") %>% 
+    as.numeric()
+  ## Regex to allow decimal seconds
+  s <- x %>% 
+    str_extract(., "\\d+(?:\\.\\d+)?(?=s)") %>% 
+    as.numeric()
+  
+  # Replace NAa with 0
+  h[is.na(h)] <- 0
+  m[is.na(m)] <- 0
+  s[is.na(s)] <- 0
+  
+  ## Return seconds
+  return(h * 3600 + m * 60 + s)
+}
+
+```
+
+
+
+## Unique Protein Groups
+
+```{r pg}
+pg_msconvert_diannv1.9.2 <- msconvert_diannv1.9.2$Protein.Group %>% unique()
+pg_thermoraw_diannv1.9.2 <- thermoraw_diannv1.9.2$Protein.Group %>% unique()
+
+
+for (i in parquets) {
+  obj <- get(i)
+  assign(paste0("pg_", i), pg(obj))
+}
+
+```
+
+
+
+## Unique Proteins
+
+```{r uniq_prots}
+## TSV files
+prots_msconvert_diannv1.9.2 <- msconvert_diannv1.9.2$Protein.Ids %>% unique() 
+prots_thermoraw_diannv1.9.2 <- thermoraw_diannv1.9.2$Protein.Ids %>% unique()
+
+## Parquet files
+for (i in parquets) {
+  obj <- get(i)
+  assign(paste0("prots_", i), proteins(obj))
+}
+
+```
+
+
+## Unique Peptides
+
+
+```{r uniq_pepts}
+## TSV files
+pepts_msconvert_diannv1.9.2 <- msconvert_diannv1.9.2$Stripped.Sequence %>% unique()
+pepts_thermoraw_diannv1.9.2 <- thermoraw_diannv1.9.2$Stripped.Sequence %>% unique()
+
+## Parquet files
+for (i in parquets) {
+  obj <- get(i)
+  assign(paste0("pepts_", i), peptides(obj))
+}
+```
+
+
+
+## Traces
+
+
+```{r traces}
+## Get all Nextflow run traces
+for (i in all_runs) {
+  obj <- i %>%
+    paste0("./sc_minibm_good_fasta/", ., "/", ., "/trace.tsv") %>%
+    read.csv(sep = "\t") %T>% 
+    ## Tee pipe to make the pipe function
+    { assign(paste0("trace_", i), ., envir = .GlobalEnv) }
+}
+
+## Format traces for analysis
+for (i in all_runs) {
+  ## Manages the name of the object
+  name <- paste0("trace_", i)
+  obj <- get(name)
+  
+  ## Convert time metrics to seconds
+  obj %<>% mutate(duration_seconds = get_seconds(obj$duration))
+  obj %<>% mutate(realtime_seconds = get_seconds(obj$realtime))
+  
+  ## Convert memory metrics to MB
+  obj %<>% mutate(peak_rss_MB = get_MB(obj$peak_rss))
+  obj %<>% mutate(peak_vmem_MB = get_MB(obj$peak_vmem))
+  obj %<>% mutate(rchar_MB = get_MB(obj$rchar))
+  obj %<>% mutate(wchar_MB = get_MB(obj$wchar))
+  
+  ## Get CPU percentage 
+  obj %<>% mutate(cpu_percentage = obj %>% 
+                    pluck("X.cpu") %>% 
+                    str_remove("%") %>% 
+                    as.numeric()
+  )
+  
+  ## 
+  assign(name, obj)
+}
+```
+
+
+## Shared bio elements
+
+```{r shared_pgs}
+## Gets all protein groups
+pg_list <- ls(pattern = "^pg_", envir = .GlobalEnv) %>% 
+  mget(., envir = .GlobalEnv, ifnotfound = list(NULL))
+pg_list %<>% Filter(Negate(is.null), .)
+
+## Upset plot
+pg_list %>% fromList() %>% 
+  upset()
+```
+
+
+```{r shared_proteins}
+prots_list <- ls(pattern = "^prots_", envir = .GlobalEnv) %>%
+  mget(., envir = .GlobalEnv, ifnotfound = list(NULL))
+prots_list %<>% Filter(Negate(is.null), .)
+
+## Upset plot
+prots_list %>% fromList() %>% 
+  upset()
+```
+
+```{r shared_peptides}
+pepts_list <- ls(pattern = "^pepts_", envir = .GlobalEnv) %>% 
+  mget(., envir = .GlobalEnv, ifnotfound = list(NULL))
+pepts_list %<>% Filter(Negate(is.null), .)
+
+## Upset plot
+pepts_list %>% fromList() %>% 
+  upset()
+```
+
+
+
+## Computational metrics
+
+### Duration
+
+Duration: Time elapsed to complete since the submission
+
+```{r comp_metrics}
+
+
+
+```
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
