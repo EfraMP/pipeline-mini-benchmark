@@ -32,44 +32,50 @@ library(UpSetR)
 ```{r data_load}
 setwd("~/Documents/EMBL_UniHD/pipeline_res")
 
-msconvert_diannv1.9.2 <- open_dataset("./sc_minibm_good_fasta/msconvert_diannv1.9.2/msconvert_diannv1.9.2/report.parquet",
+msconvert_diannv1.9.2 <- open_dataset("./sc_minibm_good_fasta/msconvert_diannv1.9.2/report.parquet",
                                       format = "parquet")
 
 
-thermoraw_diannv1.9.2 <- open_dataset("./sc_minibm_good_fasta/thermoraw_diannv1.9.2/thermoraw_diannv1.9.2/report.parquet", format = "parquet")
+thermoraw_diannv1.9.2 <- open_dataset("./sc_minibm_good_fasta/thermoraw_diannv1.9.2/report.parquet", format = "parquet")
 
 
-msconvert_diannv2.0 <- open_dataset("./sc_minibm_good_fasta/msconvert_diannv2.0/msconvert_diannv2.0/report.parquet",
+msconvert_diannv2.0 <- open_dataset("./sc_minibm_good_fasta/msconvert_diannv2.0/report.parquet",
                                     format = "parquet")
 
-thermoraw_diannv2.0 <- open_dataset("./sc_minibm_good_fasta/thermoraw_diannv2.0/thermoraw_diannv2.0/report.parquet",
+thermoraw_diannv2.0 <- open_dataset("./sc_minibm_good_fasta/thermoraw_diannv2.0/report.parquet",
                                     format = "parquet")
 
-msconvert_diannv2.0.1 <- open_dataset("./sc_minibm_good_fasta/msconvert_diannv2.0.1/msconvert_diannv2.0.1/report.parquet",
+msconvert_diannv2.0.1 <- open_dataset("./sc_minibm_good_fasta/msconvert_diannv2.0.1/report.parquet",
                                     format = "parquet")
 
-thermoraw_diannv2.0.1 <- open_dataset("./sc_minibm_good_fasta/thermoraw_diannv2.0.1/thermoraw_diannv2.0.1/report.parquet",
+thermoraw_diannv2.0.1 <- open_dataset("./sc_minibm_good_fasta/thermoraw_diannv2.0.1/report.parquet",
                                     format = "parquet")
 
-msconvert_diannv2.0.2 <- open_dataset("./sc_minibm_good_fasta/msconvert_diannv2.0.2/msconvert_diannv2.0.2/report.parquet",
+msconvert_diannv2.0.2 <- open_dataset("./sc_minibm_good_fasta/msconvert_diannv2.0.2/report.parquet",
                                     format = "parquet")
 
-thermoraw_diannv2.0.2 <- open_dataset("./sc_minibm_good_fasta/thermoraw_diannv2.0.2/thermoraw_diannv2.0.2/report.parquet",
+thermoraw_diannv2.0.2 <- open_dataset("./sc_minibm_good_fasta/thermoraw_diannv2.0.2/report.parquet",
+                                    format = "parquet")
+
+diannv2.1.0 <- open_dataset("./sc_minibm_good_fasta/diannv2.1.0/report.parquet",
                                     format = "parquet")
 
 parquets <- c(
+  "msconvert_diannv1.9.2",
+  "thermoraw_diannv1.9.2",
   "msconvert_diannv2.0",
   "thermoraw_diannv2.0",
   "msconvert_diannv2.0.1",
   "thermoraw_diannv2.0.1",
   "msconvert_diannv2.0.2",
-  "thermoraw_diannv2.0.2"
-)
+  "thermoraw_diannv2.0.2",
+  "diannv2.1.0"
+  )
 
 ## TSVs and parquets
 all_runs <- c(
-  "msconvert_diannv1.9.2",
-  "thermoraw_diannv1.9.2",
+  # "msconvert_diannv1.9.2",
+  # "thermoraw_diannv1.9.2",
   parquets
 )
 
@@ -159,10 +165,78 @@ get_seconds <- function(x) {
 
 
 ## Function to add raw conversion tool and DIA-NN version into new columns of the traces
-deconv <- function(x) {
+## The input is the specif name of the trace
+add_meta <- function(x) {
   s <- 0
   
 }
+
+
+
+## Flat violin function
+geom_flat_violin <- function(mapping = NULL, data = NULL, stat = "ydensity",
+                             position = "dodge", trim = TRUE, scale = "area",
+                             show.legend = NA, inherit.aes = TRUE, ...) {
+  layer(
+    data = data,
+    mapping = mapping,
+    stat = stat,
+    geom = GeomFlatViolin,
+    position = position,
+    show.legend = show.legend,
+    inherit.aes = inherit.aes,
+    params = list(
+      trim = trim,
+      scale = scale,
+      ...
+    )
+  )
+}
+
+#' @rdname ggplot2-ggproto
+#' @format NULL
+#' @usage NULL
+#' @export
+GeomFlatViolin <-
+  ggproto("GeomFlatViolin", Geom,
+          setup_data = function(data, params) {
+            data$width <- data$width %||%
+              params$width %||% (resolution(data$x, FALSE) * 0.9)
+            
+            # ymin, ymax, xmin, and xmax define the bounding rectangle for each group
+            data %>%
+              group_by(group) %>%
+              mutate(ymin = min(y),
+                     ymax = max(y),
+                     xmin = x,
+                     xmax = x + width / 2)
+            
+          },
+          
+          draw_group = function(data, panel_scales, coord) {
+            # Find the points for the line to go all the way around
+            data <- transform(data, xminv = x,
+                              xmaxv = x + violinwidth * (xmax - x))
+            
+            # Make sure it's sorted properly to draw the outline
+            newdata <- rbind(plyr::arrange(transform(data, x = xminv), y),
+                             plyr::arrange(transform(data, x = xmaxv), -y))
+            
+            # Close the polygon: set first and last point the same
+            # Needed for coord_polar and such
+            newdata <- rbind(newdata, newdata[1,])
+            
+            ggplot2:::ggname("geom_flat_violin", GeomPolygon$draw_panel(newdata, panel_scales, coord))
+          },
+          
+          draw_key = draw_key_polygon,
+          
+          default_aes = aes(weight = 1, colour = "grey20", fill = "white", linewidth = 0.5,
+                            alpha = NA, linetype = "solid"),
+          
+          required_aes = c("x", "y")
+  )
+
 
 
 
@@ -226,7 +300,7 @@ for (i in parquets) {
 ## Get all Nextflow run traces
 for (i in all_runs) {
   obj <- i %>%
-    paste0("./sc_minibm_good_fasta/", ., "/", ., "/trace.tsv") %>%
+    paste0("./sc_minibm_good_fasta/", ., "/trace.tsv") %>%
     read.csv(sep = "\t") %T>% 
     ## Tee pipe to make the pipe function
     { assign(paste0("trace_", i), ., envir = .GlobalEnv) }
@@ -297,6 +371,9 @@ pepts_list %>% fromList() %>%
 
 
 
+
+
+
 ## Computational metrics
 
 
@@ -305,16 +382,115 @@ pepts_list %>% fromList() %>%
 trace_list <- ls(pattern = "^trace_.*_diannv[0-9]+(\\.[0-9]+)+$") %>% 
   mget(., envir = .GlobalEnv, ifnotfound = list(NULL))
 
+## Add mzML conversion tool and DIA-NN version to list
+# imap() supplies the value (x) and key (y) automatically to the anonymous function
+trace_list %<>%  imap(function(x, y) { 
+  tool <- sub("^trace_([^_]+)_.*", "\\1", y)
+  diann_version <- sub("^trace_[^_]+_(diannv.+)$", "\\1", y)
+  
+  x %>% mutate(tool = tool,
+               diann_version = diann_version)
+})
+
+
+## Add meta data to diann2.1
+
+trace_diannv2.1.0$tool <- "diannv2.1.0"
+trace_diannv2.1.0$diann_version <- "diannv2.1.0"
+
+
+## Merge all
+combined_trace <- bind_rows(trace_list)
+
+##combined_trace %<>% bind_rows(trace_diannv2.1.0)
+
+## Get summary stats
+summary_stats <- combined_trace %>%
+  group_by(tool, diann_version) %>%
+  summarise(
+    median_runtime = median(duration_seconds, na.rm = TRUE),
+    mean_runtime   = mean(duration_seconds, na.rm = TRUE),
+    median_peak_rss = median(peak_rss_MB, na.rm = TRUE),
+    mean_cpu       = mean(cpu_percentage, na.rm = TRUE)
+  )
+
+
+## Plot
+ggplot() +
+  geom_boxplot(data = combined_trace, 
+               aes(x = tool, y = duration_seconds/60, fill = diann_version)) +
+  geom_jitter(data = trace_diannv2.1.0, 
+              aes(x = tool, y = duration_seconds/60, color = diann_version),
+              width = 0.2) +
+  labs(title = "Runtime Comparison", x = "Tool", y = "Runtime (min)") +
+  theme_minimal()
 
 ```
 
 
-### Duration
 
-Duration: Time elapsed to complete since the submission
+## mzML conversion
 
-```{r comp_metrics}
+```{r mzml}
+## Get just mzML conversion metrics
+mzml_metrics <- combined_trace %>%
+  filter(str_detect(name, "raw_to_mzml"))
 
+## Real runtime
+ggplot(mzml_metrics, aes(x = tool, y = realtime_seconds/60, fill = tool)) +
+  ylim(c(0, max(mzml_metrics$realtime_seconds/60))) +
+  geom_flat_violin(alpha = 0.7, position = position_nudge(x = .2, y = 0)) +
+  geom_jitter(alpha = 0.7, width = 0.15) +
+  geom_boxplot(alpha = 0.7, width = .25,  outlier.shape = NA) +
+  theme_minimal() +
+  theme(legend.position = "none") +
+  labs(title = "Runtime Comparison", x = "Tool", y = "Runtime (min)")
+
+## Peak of real memory
+ggplot(mzml_metrics, aes(x = tool, y = peak_rss_MB, fill = tool)) +
+  ylim(c(0, max(mzml_metrics$peak_rss_MB))) +
+  geom_jitter(alpha = 0.7, width = 0.13) +
+  geom_boxplot(alpha = 0.7, width = .25,  outlier.shape = NA) +
+  theme_minimal() +
+  theme(legend.position = "none") +
+  labs(title = "Peak of real memory", x = "Tool", y = "Memory (MB)")
+
+## Peak of virtual memory
+ggplot(mzml_metrics, aes(x = tool, y = peak_vmem_MB, fill = tool)) +
+  ylim(c(0, max(mzml_metrics$peak_vmem_MB))) +
+  geom_jitter(alpha = 0.7, width = 0.13) +
+  geom_boxplot(alpha = 0.7, width = .25,  outlier.shape = NA) +
+  theme_minimal() +
+  theme(legend.position = "none") +
+  labs(title = "Peak of virtual memory", x = "Tool", y = "Memory (MB)")
+
+## Read bytes
+ggplot(mzml_metrics, aes(x = tool, y = rchar_MB, fill = tool)) +
+  ylim(c(0, max(mzml_metrics$rchar_MB))) +
+  geom_jitter(alpha = 0.7, width = 0.13) +
+  geom_boxplot(alpha = 0.7, width = .25,  outlier.shape = NA) +
+  theme_minimal() +
+  theme(legend.position = "none") +
+  labs(title = "Information read", x = "Tool", y = "Memory (MB)")
+
+## Written bytes
+ggplot(mzml_metrics, aes(x = tool, y = wchar_MB, fill = tool)) +
+  ylim(c(0, max(mzml_metrics$wchar_MB))) +
+  geom_jitter(alpha = 0.7, width = 0.13) +
+  geom_boxplot(alpha = 0.7, width = .25,  outlier.shape = NA) +
+  theme_minimal() +
+  theme(legend.position = "none") +
+  labs(title = "Information written", x = "Tool", y = "Memory (MB)")
+
+
+## Percentage CPU
+ggplot(mzml_metrics, aes(x = tool, y = cpu_percentage, fill = tool)) +
+  ylim(c(0, max(mzml_metrics$cpu_percentage))) +
+  geom_jitter(alpha = 0.7, width = 0.13) +
+  geom_boxplot(alpha = 0.7, width = .25,  outlier.shape = NA) +
+  theme_minimal() +
+  theme(legend.position = "none") +
+  labs(title = "Percentage of CPU used", x = "Tool", "% CPU")
 
 
 ```
@@ -323,11 +499,62 @@ Duration: Time elapsed to complete since the submission
 
 
 
+## Quantification
+
+
+```{r helper_matrix}
+## Function to iterate across all results and get DIA-NN matrices into a list
+get_matrix <- function(prefix) {
+  
+  matrix_list <- list()
+  for (i in all_runs) {
+    obj <- i %>%
+      paste0("./sc_minibm_good_fasta/", ., "/report.", prefix, "_matrix.tsv") %>%
+      read.csv(sep = "\t") %T>% 
+      {
+        ## Anonymous function to fix column name from Nextflow run
+        ## tee pipe was needed
+        colnames(.) <- sub(".*?([0-9]+_.*)", "\\1", colnames(.))
+        .
+      }
+    matrix_list[[paste0(prefix, "_", i)]] <- obj
+  }
+  return(matrix_list)
+}
+```
+
+
+### Protein groups
+
+```{r}
+pg_matrices <- get_matrix("pg")
 
 
 
 
+```
 
+
+### Gene groups
+
+```{r}
+gg_matrices <- get_matrix("gg")
+```
+
+
+### Unique genes
+
+```{r}
+unique_genes <- get_matrix("unique_genes")
+```
+
+
+### Precursors
+
+
+```{r}
+pr_matrices <- get_matrix("pr")
+```
 
 
 
