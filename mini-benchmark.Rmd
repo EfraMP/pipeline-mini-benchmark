@@ -16,74 +16,61 @@ output:
 ---
 
 
+# Title
+
+
 ```{r libraries, message=FALSE, warning=FALSE}
 library(tidyverse)
 library(arrow)
-library(readr)
 library(magrittr)
-library(eulerr)
-#library(mlr3measures)
-#library(units)
-library(lubridate)
+library(fs)
+library(ggbeeswarm)
 library(UpSetR)
-```
+library(arrow)
+library(pheatmap)
+library(viridis)
+
+set.seed(0)
+setwd("~/Documents/EMBL_UniHD/mini-benchmark")
 
 
-```{r data_load}
-setwd("~/Documents/EMBL_UniHD/pipeline_res")
-
-msconvert_diannv1.9.2 <- open_dataset("./sc_minibm_good_fasta/msconvert_diannv1.9.2/report.parquet",
-                                      format = "parquet")
-
-
-thermoraw_diannv1.9.2 <- open_dataset("./sc_minibm_good_fasta/thermoraw_diannv1.9.2/report.parquet", format = "parquet")
-
-
-msconvert_diannv2.0 <- open_dataset("./sc_minibm_good_fasta/msconvert_diannv2.0/report.parquet",
-                                    format = "parquet")
-
-thermoraw_diannv2.0 <- open_dataset("./sc_minibm_good_fasta/thermoraw_diannv2.0/report.parquet",
-                                    format = "parquet")
-
-msconvert_diannv2.0.1 <- open_dataset("./sc_minibm_good_fasta/msconvert_diannv2.0.1/report.parquet",
-                                    format = "parquet")
-
-thermoraw_diannv2.0.1 <- open_dataset("./sc_minibm_good_fasta/thermoraw_diannv2.0.1/report.parquet",
-                                    format = "parquet")
-
-msconvert_diannv2.0.2 <- open_dataset("./sc_minibm_good_fasta/msconvert_diannv2.0.2/report.parquet",
-                                    format = "parquet")
-
-thermoraw_diannv2.0.2 <- open_dataset("./sc_minibm_good_fasta/thermoraw_diannv2.0.2/report.parquet",
-                                    format = "parquet")
-
-diannv2.1.0 <- open_dataset("./sc_minibm_good_fasta/diannv2.1.0/report.parquet",
-                                    format = "parquet")
-
-parquets <- c(
-  "msconvert_diannv1.9.2",
-  "thermoraw_diannv1.9.2",
-  "msconvert_diannv2.0",
-  "thermoraw_diannv2.0",
-  "msconvert_diannv2.0.1",
-  "thermoraw_diannv2.0.1",
-  "msconvert_diannv2.0.2",
-  "thermoraw_diannv2.0.2",
-  "diannv2.1.0"
-  )
-
-## TSVs and parquets
-all_runs <- c(
-  # "msconvert_diannv1.9.2",
-  # "thermoraw_diannv1.9.2",
-  parquets
+org_cols <- c(
+  Ecoli    = "#007B53",
+  Hsapiens = "#193F90"
 )
-
 ```
+
 
 
 ```{r functions}
 # Auxiliary functions
+
+## Computes Jaccard Index
+jaccard <- function(x, y) {
+  length(intersect(x, y)) / length(union(x, y))
+}
+
+
+## Commputes jaccard index pairwise of list
+jpw <- function(x) {
+  n <- names(x)
+  ## Expands pairwise
+  expand_grid(
+    names1 = n,
+    names2 = n,
+  ) %>% 
+    ## Maps the function fer columns
+    mutate(
+      index = map2_dbl(x[names1], x[names2], jaccard)
+    ) %>% 
+    ## Comes back to squared datafra,e
+    pivot_wider(
+      names_from = names2,
+      values_from = index
+    ) %>%
+    column_to_rownames("names1") 
+}
+
 
 ## Get protein groups from parquet DIA-NN output
 pg <- function(x) {
@@ -92,7 +79,6 @@ pg <- function(x) {
     pull(Protein.Group) %>% 
     unique()
 }
-
 
 ## Get proteins from parquet DIA-NN output
 proteins <- function(x) {
@@ -110,8 +96,19 @@ peptides <- function(x) {
     unique()
 }
 
+```
 
-### Function to convert units to MB
+
+
+
+
+## Computing metrics
+
+
+```{r comp_functions}
+# Auxiliary functions to convert units
+
+## Function to convert units to MB
 get_MB <- function(x) {
   ## Trim whitespace
   x %<>% as.character() %>% 
@@ -127,9 +124,10 @@ get_MB <- function(x) {
   
   ## Gets MB
   value_mb = case_when(
-    unit == "KB" ~ val / 1024,
-    unit == "MB" ~ val,
-    unit == "GB" ~ val * 1024,
+    unit %in% c("KB", "K")  ~ val / 1024,
+    unit %in% c("MB", "M")  ~ val,
+    unit %in% c("GB", "G") ~ val * 1024,
+    unit %in% c("TB", "T") ~ val * 1024 * 1024,
     TRUE ~ NA_real_
   )
   
@@ -162,399 +160,514 @@ get_seconds <- function(x) {
   ## Return seconds
   return(h * 3600 + m * 60 + s)
 }
+```
 
 
-## Function to add raw conversion tool and DIA-NN version into new columns of the traces
-## The input is the specif name of the trace
-add_meta <- function(x) {
-  s <- 0
-  
-}
+Gets metadata from server after running
+`ls -lh */*/data/*raw | tr -s ' ' '\t' > files_list.tsv` and then secure copying
+it to the local root.
+
+```{r raw_info, message=FALSE}
+raw_info <- read_tsv("./files_list.tsv",
+                     col_names = FALSE)
+
+head(raw_info)
 
 
+## Keeps just the necessary information
+raw_info %<>% select(c("X5", "X9")) %>% 
+  purrr::set_names(c("size", "fullname"))
 
-## Flat violin function
-geom_flat_violin <- function(mapping = NULL, data = NULL, stat = "ydensity",
-                             position = "dodge", trim = TRUE, scale = "area",
-                             show.legend = NA, inherit.aes = TRUE, ...) {
-  layer(
-    data = data,
-    mapping = mapping,
-    stat = stat,
-    geom = GeomFlatViolin,
-    position = position,
-    show.legend = show.legend,
-    inherit.aes = inherit.aes,
-    params = list(
-      trim = trim,
-      scale = scale,
-      ...
-    )
-  )
-}
-
-#' @rdname ggplot2-ggproto
-#' @format NULL
-#' @usage NULL
-#' @export
-GeomFlatViolin <-
-  ggproto("GeomFlatViolin", Geom,
-          setup_data = function(data, params) {
-            data$width <- data$width %||%
-              params$width %||% (resolution(data$x, FALSE) * 0.9)
-            
-            # ymin, ymax, xmin, and xmax define the bounding rectangle for each group
-            data %>%
-              group_by(group) %>%
-              mutate(ymin = min(y),
-                     ymax = max(y),
-                     xmin = x,
-                     xmax = x + width / 2)
-            
-          },
-          
-          draw_group = function(data, panel_scales, coord) {
-            # Find the points for the line to go all the way around
-            data <- transform(data, xminv = x,
-                              xmaxv = x + violinwidth * (xmax - x))
-            
-            # Make sure it's sorted properly to draw the outline
-            newdata <- rbind(plyr::arrange(transform(data, x = xminv), y),
-                             plyr::arrange(transform(data, x = xmaxv), -y))
-            
-            # Close the polygon: set first and last point the same
-            # Needed for coord_polar and such
-            newdata <- rbind(newdata, newdata[1,])
-            
-            ggplot2:::ggname("geom_flat_violin", GeomPolygon$draw_panel(newdata, panel_scales, coord))
-          },
-          
-          draw_key = draw_key_polygon,
-          
-          default_aes = aes(weight = 1, colour = "grey20", fill = "white", linewidth = 0.5,
-                            alpha = NA, linetype = "solid"),
-          
-          required_aes = c("x", "y")
+## Mutates the tibble
+raw_info %<>% mutate(size_MB = get_MB(size)) %>% 
+  separate(
+    fullname,
+    into = c("instrument", "organism", "subfolder", "file_name"),
+    sep = "/"
   )
 
+head(raw_info)
 
 
+
+ggplot(raw_info, aes(y = size_MB / 1024, x = '')) +
+  geom_beeswarm() +
+  theme_minimal() +
+  ylim(0, 12.5) +
+  labs(
+    x = "",
+    y = "Raw file size (GB)"
+  ) +
+  ggtitle("All sizes")
+
+
+
+ggplot(raw_info, aes(x = instrument, y = size_MB / 1024, colour = organism)) +
+  geom_beeswarm(size = 2, alpha = 0.7) +
+  scale_x_discrete(limits = c("FusionLumos", "Exploris480", "Astral")) +
+  scale_colour_manual(
+    name = "Organism",
+    values = org_cols
+  ) +
+  theme_minimal() +
+  ylim(0, 12.5) +
+  labs(
+    x = "Mass Spectrometer",
+    y = "Raw file size (GB)"
+  ) +
+  ggtitle("Size of raw files")
+
+
+
+ggplot(raw_info, aes(x = organism, y = size_MB / 1024, colour =  instrument)) +
+  geom_beeswarm(size = 2, alpha = 0.9) +
+  scale_x_discrete(limits = c("Ecoli", "Hsapiens")) +
+  theme_minimal() +
+  ylim(0, 12.5) +
+  labs(
+    x = "Organism",
+    y = "Raw file size (GB)"
+  ) +
+  ggtitle("Size of raw files")
 
 ```
 
 
-
-## Unique Protein Groups
-
-```{r pg}
-pg_msconvert_diannv1.9.2 <- msconvert_diannv1.9.2$Protein.Group %>% unique()
-pg_thermoraw_diannv1.9.2 <- thermoraw_diannv1.9.2$Protein.Group %>% unique()
-
-
-for (i in parquets) {
-  obj <- get(i)
-  assign(paste0("pg_", i), pg(obj))
-}
-
-```
-
-
-
-## Unique Proteins
-
-```{r uniq_prots}
-## TSV files
-prots_msconvert_diannv1.9.2 <- msconvert_diannv1.9.2$Protein.Ids %>% unique() 
-prots_thermoraw_diannv1.9.2 <- thermoraw_diannv1.9.2$Protein.Ids %>% unique()
-
-## Parquet files
-for (i in parquets) {
-  obj <- get(i)
-  assign(paste0("prots_", i), proteins(obj))
-}
-
-```
-
-
-## Unique Peptides
-
-
-```{r uniq_pepts}
-## TSV files
-pepts_msconvert_diannv1.9.2 <- msconvert_diannv1.9.2$Stripped.Sequence %>% unique()
-pepts_thermoraw_diannv1.9.2 <- thermoraw_diannv1.9.2$Stripped.Sequence %>% unique()
-
-## Parquet files
-for (i in parquets) {
-  obj <- get(i)
-  assign(paste0("pepts_", i), peptides(obj))
-}
-```
-
-
-
-## Traces
-
-
-```{r traces}
-## Get all Nextflow run traces
-for (i in all_runs) {
-  obj <- i %>%
-    paste0("./sc_minibm_good_fasta/", ., "/trace.tsv") %>%
-    read.csv(sep = "\t") %T>% 
-    ## Tee pipe to make the pipe function
-    { assign(paste0("trace_", i), ., envir = .GlobalEnv) }
-}
-
-## Format traces for analysis
-for (i in all_runs) {
-  ## Manages the name of the object
-  name <- paste0("trace_", i)
-  obj <- get(name)
-  
-  ## Convert time metrics to seconds
-  obj %<>% mutate(duration_seconds = get_seconds(obj$duration))
-  obj %<>% mutate(realtime_seconds = get_seconds(obj$realtime))
-  
-  ## Convert memory metrics to MB
-  obj %<>% mutate(peak_rss_MB = get_MB(obj$peak_rss))
-  obj %<>% mutate(peak_vmem_MB = get_MB(obj$peak_vmem))
-  obj %<>% mutate(rchar_MB = get_MB(obj$rchar))
-  obj %<>% mutate(wchar_MB = get_MB(obj$wchar))
-  
-  ## Get CPU percentage 
-  obj %<>% mutate(cpu_percentage = obj %>% 
-                    pluck("X.cpu") %>% 
-                    str_remove("%") %>% 
-                    as.numeric()
-  )
-  
-  ## 
-  assign(name, obj)
-}
-```
-
-
-## Shared bio elements
-
-```{r shared_pgs}
-## Gets all protein groups
-pg_list <- ls(pattern = "^pg_", envir = .GlobalEnv) %>% 
-  mget(., envir = .GlobalEnv, ifnotfound = list(NULL))
-pg_list %<>% Filter(Negate(is.null), .)
-
-## Upset plot
-pg_list %>% fromList() %>% 
-  upset()
-```
-
-
-```{r shared_proteins}
-prots_list <- ls(pattern = "^prots_", envir = .GlobalEnv) %>%
-  mget(., envir = .GlobalEnv, ifnotfound = list(NULL))
-prots_list %<>% Filter(Negate(is.null), .)
-
-## Upset plot
-prots_list %>% fromList() %>% 
-  upset()
-```
-
-```{r shared_peptides}
-pepts_list <- ls(pattern = "^pepts_", envir = .GlobalEnv) %>% 
-  mget(., envir = .GlobalEnv, ifnotfound = list(NULL))
-pepts_list %<>% Filter(Negate(is.null), .)
-
-## Upset plot
-pepts_list %>% fromList() %>% 
-  upset()
-```
-
-
-
-
-
-
-## Computational metrics
-
-
-```{r all_traces}
-## Get all data frame into the same object
-trace_list <- ls(pattern = "^trace_.*_diannv[0-9]+(\\.[0-9]+)+$") %>% 
-  mget(., envir = .GlobalEnv, ifnotfound = list(NULL))
-
-## Add mzML conversion tool and DIA-NN version to list
-# imap() supplies the value (x) and key (y) automatically to the anonymous function
-trace_list %<>%  imap(function(x, y) { 
-  tool <- sub("^trace_([^_]+)_.*", "\\1", y)
-  diann_version <- sub("^trace_[^_]+_(diannv.+)$", "\\1", y)
-  
-  x %>% mutate(tool = tool,
-               diann_version = diann_version)
-})
-
-
-## Add meta data to diann2.1
-
-trace_diannv2.1.0$tool <- "diannv2.1.0"
-trace_diannv2.1.0$diann_version <- "diannv2.1.0"
-
-
-## Merge all
-combined_trace <- bind_rows(trace_list)
-
-##combined_trace %<>% bind_rows(trace_diannv2.1.0)
-
-## Get summary stats
-summary_stats <- combined_trace %>%
-  group_by(tool, diann_version) %>%
+```{r summarize_raw}
+## Collapse into average size of raw files
+raw_summary <- raw_info %>%
+  group_by(instrument, organism) %>%
   summarise(
-    median_runtime = median(duration_seconds, na.rm = TRUE),
-    mean_runtime   = mean(duration_seconds, na.rm = TRUE),
-    median_peak_rss = median(peak_rss_MB, na.rm = TRUE),
-    mean_cpu       = mean(cpu_percentage, na.rm = TRUE)
+    avg_raw_size = mean(size_MB, na.rm = TRUE),
+    ## Cleans unnecessary metadata
+    .groups  = "drop"
+  ) %>% 
+  ## Converts back to GB
+  mutate(avg_raw_size = avg_raw_size / 1024)
+
+
+
+```
+
+
+```{r fasta_info}
+fasta_info <- read_tsv("./fasta_list.tsv",
+                       col_names = FALSE)
+
+
+fasta_info
+
+## Filter out unnecessary columns
+fasta_info %<>% select(c("X5", "X9")) %>% 
+  purrr::set_names(c("size", "fullname")) %>% 
+  mutate(size_MB = get_MB(size)) %>% 
+  ## Get organism name with regex
+  mutate(organism = str_extract(fullname, "(?<=/)[^/_]+(?=_)"))
+
+```
+
+
+
+Get times after doing `grep -m1 'duration: <strong>' */*/*/nf_report.html > runtimes.txt`
+
+```{r runtimes, message=FALSE}
+runtimes <- read_delim("runtimes.txt",
+                       delim =  "          ", ## By some reason grep created 10 whitespaces
+                       col_names = FALSE) %>% 
+  set_names(c("run", "string")) %>% 
+  mutate(time = get_seconds(string) / 60,
+         instrument = word(run, 1, sep = "/"),
+         organism = word(run, 2, sep = "/"),
+         profile = word(run, 3, sep = "/")) %>% 
+  select(!run) %>% 
+  select(!string)
+
+
+
+runtimes %>% 
+  filter(!str_detect(profile, "1\\.9\\.1")) %>% 
+  ggplot() +
+  geom_beeswarm(aes(y = time / 60, x = instrument, colour = organism),
+                size = 2,
+                alpha = 0.8,
+                ) +
+  scale_colour_manual(
+    name = "Organism",
+    values = org_cols
+  ) +
+  geom_boxplot(aes(y = time / 60, x = instrument),
+               width = .25, alpha = 0, 
+               outlier.shape = NA) +
+  scale_x_discrete(limits = c("FusionLumos", "Exploris480", "Astral")) +
+  theme_minimal() +
+  labs(
+    x =  "Mass Spectrometer",
+    y = "Total runtime (h)"
   )
 
 
-## Plot
-ggplot() +
-  geom_boxplot(data = combined_trace, 
-               aes(x = tool, y = duration_seconds/60, fill = diann_version)) +
-  geom_jitter(data = trace_diannv2.1.0, 
-              aes(x = tool, y = duration_seconds/60, color = diann_version),
-              width = 0.2) +
-  labs(title = "Runtime Comparison", x = "Tool", y = "Runtime (min)") +
-  theme_minimal()
+
+runtimes %>% 
+  filter(!str_detect(profile, "1\\.9\\.1")) %>% 
+  ggplot() +
+  geom_beeswarm(aes(y = time / 60, x = organism, colour = instrument),
+                size = 2,
+                alpha = 0.9,
+  ) +
+  geom_boxplot(aes(y = time / 60, x = organism),
+               width = .25, alpha = 0, 
+               outlier.shape = NA) +
+  scale_x_discrete(limits = c("Ecoli", "Hsapiens")) +
+  theme_minimal() +
+  labs(
+    x =  "Organism",
+    y = "Total runtime (h)"
+  )
+
+
+
+size_time <- left_join(runtimes, raw_summary,
+                       by = c("instrument", "organism"))
+
+
+
+size_time %>% 
+  filter(!str_detect(profile, "1\\.9\\.1")) %>% 
+  ggplot(aes(x = avg_raw_size, y = time /60 ,
+                        colour = organism,
+                        shape = instrument)) +
+  geom_point(size = 2, alpha = 0.8) +
+  scale_colour_manual(
+    name = "Organism",
+    values = org_cols
+  ) +
+  theme_minimal() +
+  labs(
+    x = "Average raw file size (GB)",
+    y = "Total runtime (h)" 
+  )
+
+
+size_time %>% 
+  filter(!str_detect(profile, "1\\.9\\.1")) %>% 
+  ggplot(aes(x = avg_raw_size, y = time /60 ,
+                        colour = instrument,
+                        shape = organism)) +
+  geom_point(size = 2, alpha = 0.8) +
+  theme_minimal() +
+  labs(
+    x = "Average raw file size (GB)",
+    y = "Total runtime (h)" 
+  )
+
+
+size_time %>%
+  filter(!str_detect(profile, "1\\.9\\.1")) %>% 
+  filter(instrument == "Astral") %>% 
+  ggplot(aes(x = avg_raw_size, y = time /60 ,
+             colour = organism)) +
+  geom_point(size = 2, alpha = 0.8) +
+  scale_colour_manual(
+    name = "Organism",
+    values = org_cols
+  ) +
+  theme_minimal() +
+  labs(
+    x = "Average raw file size (GB)",
+    y = "Total runtime (h)" 
+  ) +
+  ggtitle("Astral runs")
+
+
+
+size_time %>%
+  filter(!str_detect(profile, "1\\.9\\.1")) %>% 
+  filter(instrument == "Exploris480") %>% 
+  ggplot(aes(x = avg_raw_size, y = time /60 ,
+             colour = organism)) +
+  geom_point(size = 2, alpha = 0.8) +
+  scale_colour_manual(
+    name = "Organism",
+    values = org_cols
+  ) +
+  theme_minimal() +
+  labs(
+    x = "Average raw file size (GB)",
+    y = "Total runtime (h)" 
+  ) +
+  ggtitle("Exploris480 runs")
+
+
+
+size_time %>%
+  filter(!str_detect(profile, "1\\.9\\.1")) %>% 
+  filter(instrument == "FusionLumos") %>% 
+  ggplot(aes(x = avg_raw_size, y = time /60 ,
+             colour = organism)) +
+  geom_point(size = 2, alpha = 0.8) +
+  scale_colour_manual(
+    name = "Organism",
+    values = org_cols
+  ) +
+  theme_minimal() +
+  labs(
+    x = "Average raw file size (GB)",
+    y = "Total runtime (h)" 
+  ) +
+  ggtitle("FusionLumos runs")
+
+
+size_time %>% 
+  filter(!str_detect(profile, "1\\.9\\.1")) %>% 
+  ggplot(aes(x = avg_raw_size, y = time /60 ,
+                        colour = organism, 
+                        shape = instrument)) +
+  geom_point(size = 3, alpha = 0.8) +
+  scale_colour_manual(
+    name = "Organism",
+    values = org_cols
+  ) +
+  theme_minimal() +
+  labs(
+    x = "Average raw file size (GB)",
+    y = "Total runtime (h)" 
+  )
+
+
 
 ```
 
 
 
-## mzML conversion
 
-```{r mzml}
-## Get just mzML conversion metrics
-mzml_metrics <- combined_trace %>%
-  filter(str_detect(name, "raw_to_mzml"))
+```{r read_traces, message=FALSE}
+## Gets names of the traces TSVs
+traces_files <- dir_ls(
+  path = ".",
+  recurse = TRUE,
+  glob = "*nf_trace.tsv"
+)
 
-## Real runtime
-ggplot(mzml_metrics, aes(x = tool, y = realtime_seconds/60, fill = tool)) +
-  ylim(c(0, max(mzml_metrics$realtime_seconds/60))) +
-  geom_flat_violin(alpha = 0.7, position = position_nudge(x = .2, y = 0)) +
-  geom_jitter(alpha = 0.7, width = 0.15) +
-  geom_boxplot(alpha = 0.7, width = .25,  outlier.shape = NA) +
-  theme_minimal() +
-  theme(legend.position = "none") +
-  labs(title = "Runtime Comparison", x = "Tool", y = "Runtime (min)")
-
-## Peak of real memory
-ggplot(mzml_metrics, aes(x = tool, y = peak_rss_MB, fill = tool)) +
-  ylim(c(0, max(mzml_metrics$peak_rss_MB))) +
-  geom_jitter(alpha = 0.7, width = 0.13) +
-  geom_boxplot(alpha = 0.7, width = .25,  outlier.shape = NA) +
-  theme_minimal() +
-  theme(legend.position = "none") +
-  labs(title = "Peak of real memory", x = "Tool", y = "Memory (MB)")
-
-## Peak of virtual memory
-ggplot(mzml_metrics, aes(x = tool, y = peak_vmem_MB, fill = tool)) +
-  ylim(c(0, max(mzml_metrics$peak_vmem_MB))) +
-  geom_jitter(alpha = 0.7, width = 0.13) +
-  geom_boxplot(alpha = 0.7, width = .25,  outlier.shape = NA) +
-  theme_minimal() +
-  theme(legend.position = "none") +
-  labs(title = "Peak of virtual memory", x = "Tool", y = "Memory (MB)")
-
-## Read bytes
-ggplot(mzml_metrics, aes(x = tool, y = rchar_MB, fill = tool)) +
-  ylim(c(0, max(mzml_metrics$rchar_MB))) +
-  geom_jitter(alpha = 0.7, width = 0.13) +
-  geom_boxplot(alpha = 0.7, width = .25,  outlier.shape = NA) +
-  theme_minimal() +
-  theme(legend.position = "none") +
-  labs(title = "Information read", x = "Tool", y = "Memory (MB)")
-
-## Written bytes
-ggplot(mzml_metrics, aes(x = tool, y = wchar_MB, fill = tool)) +
-  ylim(c(0, max(mzml_metrics$wchar_MB))) +
-  geom_jitter(alpha = 0.7, width = 0.13) +
-  geom_boxplot(alpha = 0.7, width = .25,  outlier.shape = NA) +
-  theme_minimal() +
-  theme(legend.position = "none") +
-  labs(title = "Information written", x = "Tool", y = "Memory (MB)")
-
-
-## Percentage CPU
-ggplot(mzml_metrics, aes(x = tool, y = cpu_percentage, fill = tool)) +
-  ylim(c(0, max(mzml_metrics$cpu_percentage))) +
-  geom_jitter(alpha = 0.7, width = 0.13) +
-  geom_boxplot(alpha = 0.7, width = .25,  outlier.shape = NA) +
-  theme_minimal() +
-  theme(legend.position = "none") +
-  labs(title = "Percentage of CPU used", x = "Tool", "% CPU")
-
-
+## Reads all the trace files
+traces_list <- traces_files %>% 
+  purrr::set_names() %>% 
+  map(read_tsv)
 ```
 
 
 
-
-
-## Quantification
-
-
-```{r helper_matrix}
-## Function to iterate across all results and get DIA-NN matrices into a list
-get_matrix <- function(prefix) {
+```{r warning=FALSE}
+## Using map because it is a list of tibbles
+traces_list %<>% map(
+  ~ mutate(
+    .x,
+    
+    ### Convert time metrics to seconds
+    duration_seconds = get_seconds(duration),
+    realtime_seconds = get_seconds(realtime),
+    
+    ### Convert memory metrics to MB
+    peak_rss_MB = get_MB(peak_rss),
+    peak_vmem_MB = get_MB(peak_vmem),
+    rchar_MB = get_MB(rchar),
+    wchar_MB = get_MB(wchar),
+    
+    ### Get CPU percentage
+    cpu_percentage = .x %>% 
+      pluck("%cpu") %>% 
+      str_remove("%") %>% 
+      as.numeric()
+  )
+)
   
-  matrix_list <- list()
-  for (i in all_runs) {
-    obj <- i %>%
-      paste0("./sc_minibm_good_fasta/", ., "/report.", prefix, "_matrix.tsv") %>%
-      read.csv(sep = "\t") %T>% 
-      {
-        ## Anonymous function to fix column name from Nextflow run
-        ## tee pipe was needed
-        colnames(.) <- sub(".*?([0-9]+_.*)", "\\1", colnames(.))
-        .
-      }
-    matrix_list[[paste0(prefix, "_", i)]] <- obj
-  }
-  return(matrix_list)
-}
+
+## Adds metadata from the tibble name as column
+## Use imap() instead if map2() for simplicity
+traces_list %<>% imap(~ .x %>% 
+                        mutate(
+                          instrument = word(.y, 1, sep = "/"),
+                          organism = word(.y, 2, sep = "/"),
+                          profile = word(.y, 3, sep = "/")
+                        ))
+
+
+traces_list[1] %>% str()
 ```
 
 
-### Protein groups
+summarize everything
+
+
+```{r traces_times}
+## Summarize total times per <instrument/organism/profile>
+traces_times <- imap_dfr(traces_list, ~ {
+  # split the list‐name (.y) into components
+  comb <- str_split(.y, "/", simplify = TRUE)
+  tibble(
+    instrument = comb[1],
+    organism = comb[2],
+    profile = comb[3],
+    ## Also convert to minutes
+    total_duration_min = sum(.x$duration_seconds, na.rm = TRUE) %>% { . / 60 },
+    total_realtime_min = sum(.x$realtime_seconds, na.rm = TRUE) %>% { . / 60 }
+  )
+})
+```
+
+
+
+## Biological metrics
+
+
+
+```{r read_parquets}
+parquet_files <- dir_ls(
+  path = ".",
+  recurse = TRUE,
+  glob = "*report.parquet"
+)
+
+## Reads all the trace files
+parquet_list <- parquet_files %>% 
+  purrr::set_names() %>% 
+  map(open_dataset, format = "parquet")
+
+```
+
+
+
+```{r parquets}
+pg_list <- parquet_list %>% 
+  map(pg)
+
+
+
+proteins_list <- parquet_list %>% 
+  map(proteins)
+
+
+
+peeptides_list <- parquet_list %>% 
+  map(peptides)
+
+
+```
+
+
+
+
+```{r pg_ecoli}
+pg_ecoli <- pg_list %>% 
+  { .[str_detect(names(.), "Ecoli")] }
+
+
+
+
+pg_ecoli_astral <- pg_ecoli %>% 
+  { .[str_detect(names(.), "Astral")] } %>% 
+  set_names( word(names(.), 3, sep = "/") )
+
+pg_ecoli_astral %>% 
+  jpw() %>% 
+  as.matrix() %>% 
+  pheatmap(
+    cluster_rows       = TRUE,   # or TRUE if you want clustering
+    cluster_cols       = TRUE,
+    border_color       = NA,
+    color              = viridis(100),
+    na_col             = "grey90",
+    main               = "Astral E coli | Pairwise Index",
+    angle_col          = 45,
+    fontsize_row       = 10,
+    fontsize_col       = 10,
+    cellwidth          = 30,
+    cellheight         = 30
+  )
+
+
+pg_ecoli_astral %>% 
+  fromList() %>% 
+  upset(nsets = ncol(.),
+        order.by = "freq",
+        decreasing = TRUE,
+        nintersects = 10)
+
+
+
+
+
+pg_ecoli_exploris <- pg_ecoli %>% 
+  { .[str_detect(names(.), "Exploris480")] } %>% 
+  set_names( word(names(.), 3, sep = "/") )
+
+
+pg_ecoli_exploris %>% 
+  jpw() %>% 
+  as.matrix() %>% 
+  pheatmap(
+    cluster_rows       = TRUE,   # or TRUE if you want clustering
+    cluster_cols       = TRUE,
+    border_color       = NA,
+    color              = viridis(100),
+    na_col             = "grey90",
+    main               = "Exploris480 E coli | Pairwise Jaccard",
+    angle_col          = 45,
+    fontsize_row       = 10,
+    fontsize_col       = 10,
+    cellwidth          = 30,
+    cellheight         = 30
+  )
+
+
+pg_ecoli_astral %>% 
+  fromList() %>% 
+  upset(nsets = ncol(.),
+        order.by = "freq",
+        decreasing = TRUE,
+        nintersects = 10)
+
+
+
+pg_ecoli_lumos <- pg_ecoli %>% 
+  { .[str_detect(names(.), "FusionLumos")] } %>% 
+   set_names( word(names(.), 3, sep = "/") )
+
+
+pg_ecoli_lumos %>% 
+  jpw() %>% 
+  as.matrix() %>% 
+  pheatmap(
+    cluster_rows       = TRUE,   # or TRUE if you want clustering
+    cluster_cols       = TRUE,
+    border_color       = NA,
+    color              = viridis(100),
+    na_col             = "grey90",
+    main               = "FusionLumos E coli | Pairwise Jaccard",
+    angle_col          = 45,
+    fontsize_row       = 10,
+    fontsize_col       = 10,
+    cellwidth          = 30,
+    cellheight         = 30
+  )
+
+pg_ecoli_astral %>% 
+  fromList() %>% 
+  upset(nsets = ncol(.),
+        order.by = "freq",
+        decreasing = TRUE,
+        nintersects = 10)
+
+
+
+```
+
+
+
 
 ```{r}
-pg_matrices <- get_matrix("pg")
-
-
-
-
+sessionInfo()
 ```
 
-
-### Gene groups
-
-```{r}
-gg_matrices <- get_matrix("gg")
-```
-
-
-### Unique genes
-
-```{r}
-unique_genes <- get_matrix("unique_genes")
-```
-
-
-### Precursors
-
-
-```{r}
-pr_matrices <- get_matrix("pr")
-```
 
 
 
