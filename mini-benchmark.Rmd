@@ -16,7 +16,7 @@ output:
 ---
 
 
-# Title
+# Benchamarking of a Nextlfow pipeline for MS-based proteomics
 
 
 ```{r libraries, message=FALSE, warning=FALSE}
@@ -29,6 +29,12 @@ library(UpSetR)
 library(arrow)
 library(pheatmap)
 library(viridis)
+library(paletteer)
+library(diann)
+library(biomaRt)
+library(clusterProfiler)
+library(org.Hs.eg.db)
+
 
 set.seed(0)
 setwd("~/Documents/EMBL_UniHD/mini-benchmark")
@@ -38,64 +44,9 @@ org_cols <- c(
   Ecoli    = "#007B53",
   Hsapiens = "#193F90"
 )
-```
 
-
-
-```{r functions}
-# Auxiliary functions
-
-## Computes Jaccard Index
-jaccard <- function(x, y) {
-  length(intersect(x, y)) / length(union(x, y))
-}
-
-
-## Commputes jaccard index pairwise of list
-jpw <- function(x) {
-  n <- names(x)
-  ## Expands pairwise
-  expand_grid(
-    names1 = n,
-    names2 = n,
-  ) %>% 
-    ## Maps the function fer columns
-    mutate(
-      index = map2_dbl(x[names1], x[names2], jaccard)
-    ) %>% 
-    ## Comes back to squared datafra,e
-    pivot_wider(
-      names_from = names2,
-      values_from = index
-    ) %>%
-    column_to_rownames("names1") 
-}
-
-
-## Get protein groups from parquet DIA-NN output
-pg <- function(x) {
-  x %>% 
-    collect() %>% 
-    pull(Protein.Group) %>% 
-    unique()
-}
-
-## Get proteins from parquet DIA-NN output
-proteins <- function(x) {
-  x %>% 
-    collect() %>% 
-    pull(Protein.Ids) %>% 
-    unique()
-}
-
-## Get peptides from parquet DIA-NN output
-peptides <- function(x) {
-  x %>% 
-    collect() %>% 
-    pull(Stripped.Sequence) %>% 
-    unique()
-}
-
+## Overwrites all functions
+select <- dplyr::select
 ```
 
 
@@ -103,6 +54,9 @@ peptides <- function(x) {
 
 
 ## Computing metrics
+
+
+
 
 
 ```{r comp_functions}
@@ -175,7 +129,7 @@ head(raw_info)
 
 
 ## Keeps just the necessary information
-raw_info %<>% select(c("X5", "X9")) %>% 
+raw_info %<>% dplyr::select(c("X5", "X9")) %>% 
   purrr::set_names(c("size", "fullname"))
 
 ## Mutates the tibble
@@ -187,18 +141,6 @@ raw_info %<>% mutate(size_MB = get_MB(size)) %>%
   )
 
 head(raw_info)
-
-
-
-ggplot(raw_info, aes(y = size_MB / 1024, x = '')) +
-  geom_beeswarm() +
-  theme_minimal() +
-  ylim(0, 12.5) +
-  labs(
-    x = "",
-    y = "Raw file size (GB)"
-  ) +
-  ggtitle("All sizes")
 
 
 
@@ -215,20 +157,9 @@ ggplot(raw_info, aes(x = instrument, y = size_MB / 1024, colour = organism)) +
     x = "Mass Spectrometer",
     y = "Raw file size (GB)"
   ) +
-  ggtitle("Size of raw files")
+  ggtitle("Size of raw files per experiment")
 
 
-
-ggplot(raw_info, aes(x = organism, y = size_MB / 1024, colour =  instrument)) +
-  geom_beeswarm(size = 2, alpha = 0.9) +
-  scale_x_discrete(limits = c("Ecoli", "Hsapiens")) +
-  theme_minimal() +
-  ylim(0, 12.5) +
-  labs(
-    x = "Organism",
-    y = "Raw file size (GB)"
-  ) +
-  ggtitle("Size of raw files")
 
 ```
 
@@ -244,9 +175,6 @@ raw_summary <- raw_info %>%
   ) %>% 
   ## Converts back to GB
   mutate(avg_raw_size = avg_raw_size / 1024)
-
-
-
 ```
 
 
@@ -258,7 +186,7 @@ fasta_info <- read_tsv("./fasta_list.tsv",
 fasta_info
 
 ## Filter out unnecessary columns
-fasta_info %<>% select(c("X5", "X9")) %>% 
+fasta_info %<>% dplyr::select(c("X5", "X9")) %>% 
   purrr::set_names(c("size", "fullname")) %>% 
   mutate(size_MB = get_MB(size)) %>% 
   ## Get organism name with regex
@@ -302,7 +230,8 @@ runtimes %>%
   theme_minimal() +
   labs(
     x =  "Mass Spectrometer",
-    y = "Total runtime (h)"
+    y = "Total runtime (h)",
+    title = "Runtime per experiment"
   )
 
 
@@ -334,9 +263,9 @@ size_time <- left_join(runtimes, raw_summary,
 size_time %>% 
   filter(!str_detect(profile, "1\\.9\\.1")) %>% 
   ggplot(aes(x = avg_raw_size, y = time /60 ,
-                        colour = organism,
+                        colour = organism, 
                         shape = instrument)) +
-  geom_point(size = 2, alpha = 0.8) +
+  geom_point(size = 3, alpha = 0.8) +
   scale_colour_manual(
     name = "Organism",
     values = org_cols
@@ -344,8 +273,10 @@ size_time %>%
   theme_minimal() +
   labs(
     x = "Average raw file size (GB)",
-    y = "Total runtime (h)" 
+    y = "Total runtime (h)",
+    title = "Runtime vs file size"
   )
+
 
 
 size_time %>% 
@@ -357,8 +288,10 @@ size_time %>%
   theme_minimal() +
   labs(
     x = "Average raw file size (GB)",
-    y = "Total runtime (h)" 
+    y = "Total runtime (h)",
+    title = "Runtime vs file size"
   )
+
 
 
 size_time %>%
@@ -417,25 +350,47 @@ size_time %>%
   ggtitle("FusionLumos runs")
 
 
-size_time %>% 
-  filter(!str_detect(profile, "1\\.9\\.1")) %>% 
-  ggplot(aes(x = avg_raw_size, y = time /60 ,
-                        colour = organism, 
-                        shape = instrument)) +
-  geom_point(size = 3, alpha = 0.8) +
-  scale_colour_manual(
-    name = "Organism",
-    values = org_cols
-  ) +
-  theme_minimal() +
-  labs(
-    x = "Average raw file size (GB)",
-    y = "Total runtime (h)" 
-  )
+```
 
 
+
+
+
+```{r deconv}
+deconv_rt <- function(x, ms, org) {
+  x %>% 
+    filter(
+      !str_detect(profile, "1\\.9\\.1"),
+      instrument == ms,
+      organism == org
+    ) %>% 
+    mutate(
+      convert_tool = word(profile, 1, sep = "_"),
+      diann_version = word(profile, 2, sep = "_"),
+    ) %>% 
+    mutate(
+      diann_version = replace_na(diann_version, "diannv2.1")
+    ) %>% 
+    ggplot(aes(x = convert_tool, y = time / 60, shape = diann_version)) +
+    geom_beeswarm(size = 3, color = "#18974C") +
+    theme_minimal() +
+    labs(
+      x = "Raw conversion tool",
+      y = "Total runtime (h)"
+    ) +
+    ggtitle(paste("Pipeline runtimes for", org, "measured in", ms))
+}
+
+
+deconv_rt(size_time, "Astral", "Hsapiens") +
+  ylim(0, NA)
+
+
+deconv_rt(size_time, "Astral", "Ecoli")  +
+  ylim(0, NA)
 
 ```
+
 
 
 
@@ -456,7 +411,7 @@ traces_list <- traces_files %>%
 
 
 
-```{r warning=FALSE}
+```{r traces, warning=FALSE}
 ## Using map because it is a list of tibbles
 traces_list %<>% map(
   ~ mutate(
@@ -518,155 +473,838 @@ traces_times <- imap_dfr(traces_list, ~ {
 
 ## Biological metrics
 
+### Quality Control
+
+```{r qc_functions}
+## Standard QC thresholds on DIA-NN reports
+## Extracts high quality peptides
+qc <- function(x) {
+  x %>% 
+    collect() %>% 
+    filter(
+      ## Standard thresholds
+      Q.Value <= 0.01,
+      Lib.Q.Value <= 0.01,
+      Lib.PG.Q.Value <= 0.01,
+      PG.Q.Value <= 0.05,
+      ### Filters out contaminants
+      !str_detect(Protein.Group, "contam_sp"),
+      !str_detect(Protein.Ids, "contam_sp")
+    ) %>% 
+    pull(Precursor.Id) %>%
+    unique()
+}
 
 
-```{r read_parquets}
-parquet_files <- dir_ls(
+## Function to perform qc on the report's precursor
+## and filter them out from the matrices
+clean <- function(report, mat) {
+  out <- mat %>% 
+    filter(Precursor.Id %in% qc(report)) %>%
+    ## Collapses to precursor level and removes missing values
+    mutate(
+      ## Converts NAs to 0s
+      across(c(ends_with("mzML"), ends_with("raw")),
+             ~ replace_na(.x, 0))
+    ) %>% 
+    group_by(Precursor.Id) %>% 
+    mutate(
+      ## Sum intensities per precursors
+      across(c(ends_with("mzML"), ends_with("raw")),
+             sum),
+    ) %>% 
+    ungroup() %>% 
+    filter(
+      ## Filters our zeros
+      !if_any(c(ends_with("mzML"), ends_with("raw")),
+              ~. == 0)
+    )
+}
+```
+
+
+
+```{r read_diann_outputs, message=FALSE, warning=FALSE}
+## Lists parquets
+parquet_list <- dir_ls(
   path = ".",
   recurse = TRUE,
   glob = "*report.parquet"
-)
-
-## Reads all the trace files
-parquet_list <- parquet_files %>% 
+) %>% 
+  ## Reads all the parquet files
   purrr::set_names() %>% 
   map(open_dataset, format = "parquet")
 
+
+## Lists DIA-NN v1.8 reports
+diann_list <- dir_ls(
+  path = ".",
+  recurse = TRUE,
+  glob = "*diann-report"
+) %>% 
+  ## Read DIA-NN v1.8 reports
+  purrr::set_names() %>% 
+  map(diann_load)
+
+
+## Concatenates all
+all_reports <- c(
+  parquet_list,
+  diann_list
+)
+
+
+## Lists matrices
+pr_matrixes <- dir_ls(
+  path = ".",
+  recurse = TRUE,
+  regexp = "*pr_matrix.tsv"
+) %>% 
+  ## Exclude firts passed
+  str_subset("first-pass", negate = TRUE) %>% 
+  purrr::set_names() %>% 
+  map(read_tsv)
+```
+
+
+
+```{r qc}
+# Performs QC
+
+## Gets <instrument/organism/profile> keys
+keys <- all_reports %>% 
+  names() %>% 
+  str_replace("^((?:[^/]+/){2}[^/]+).*", "\\1")
+
+
+keyed_reports <- all_reports %>% 
+  set_names(
+    sub("^((?:[^/]+/){2}[^/]+).*", "\\1", names(.) )
+  )
+
+
+keyed_matrices <- pr_matrixes %>% 
+  set_names(
+    sub("^((?:[^/]+/){2}[^/]+).*", "\\1", names(.) )
+  )
+
+pr_matrixes_cleaned <- imap(
+  keyed_reports,
+  ~ if(.y %in% names(keyed_matrices)) 
+    clean(.x, keyed_matrices[[.y]])
+)
+
+
+```
+
+
+
+
+### Detected biological entities
+
+```{r bio_functions}
+# Functions to extract information from DIA-NN outputs
+
+## Get protein groups from parquet DIA-NN output
+pg <- function(x) {
+  x %>% 
+    collect() %>% 
+    pull(Protein.Group) %>% 
+    unique()
+}
+
+## Get proteins from parquet DIA-NN output
+proteins <- function(x) {
+  x %>% 
+    collect() %>% 
+    pull(Protein.Ids) %>% 
+    unique()
+}
+
+## Get peptides from parquet DIA-NN output
+peptides <- function(x) {
+  x %>% 
+    collect() %>% 
+    pull(Precursor.Id) %>% 
+    unique()
+}
 ```
 
 
 
 ```{r parquets}
-pg_list <- parquet_list %>% 
-  map(pg)
+pg_list <- c(
+  pr_matrixes_cleaned %>% map(pg)
+  )
+
+
+proteins_list <- c(
+  pr_matrixes_cleaned %>% map(proteins)
+)
+
+
+peptides_list <- c(
+  pr_matrixes_cleaned %>% map(peptides)
+)
+```
 
 
 
-proteins_list <- parquet_list %>% 
-  map(proteins)
+```{r jaccard_index}
+# Auxiliary functions to get Jaccard indexes 
+
+## Computes Jaccard Index
+jaccard <- function(x, y) {
+  length(intersect(x, y)) / length(union(x, y))
+}
 
 
+## Commputes jaccard index pairwise of list
+jpw <- function(x) {
+  n <- names(x)
+  ## Expands pairwise
+  expand_grid(
+    names1 = n,
+    names2 = n,
+  ) %>% 
+    ## Maps the function fer columns
+    mutate(
+      index = map2_dbl(x[names1], x[names2], jaccard)
+    ) %>% 
+    ## Comes back to squared datafra,e
+    pivot_wider(
+      names_from = names2,
+      values_from = index
+    ) %>%
+    column_to_rownames("names1") 
+}
 
-peeptides_list <- parquet_list %>% 
-  map(peptides)
+## Function to automatize heatmap plotting
+jaccard_hm <- function(x, string) {
+  x %>% 
+    jpw() %>% 
+      pheatmap(
+        main  = string,
+        cluster_rows = TRUE,
+        cluster_cols = TRUE,
+        border_color = NA,
+        color = viridis(100),
+        angle_col = 45,
+        fontsize_row = 10,
+        fontsize_col = 10,
+        cellwidth  = 30,
+        cellheight = 30
+      )
+}
+
+
+## Function to automatize upset plotting
+jaccard_us <- function(x) {
+  x %>% 
+    fromList() %>% 
+    upset(nsets = ncol(.),
+          order.by = "freq",
+          decreasing = TRUE,
+          nintersects = 10)
+}
 
 
 ```
 
 
+#### Protein groups 
 
 
-```{r pg_ecoli}
+##### *Homo sapiens*
+
+```{r pg_human_astral}
+pg_hsapiens <- pg_list %>% 
+  { .[str_detect(names(.), "Hsapiens")] }
+
+
+pg_hsapiens_astral <- pg_hsapiens %>% 
+  { .[str_detect(names(.), "Astral")] } %>% 
+  set_names( word(names(.), 3, sep = "/") )
+
+
+jaccard_hm(pg_hsapiens_astral, "Astral H sapiens | Pairwise Jaccard Index of identified protein groups")
+
+jaccard_us(pg_hsapiens_astral)
+```
+
+
+
+
+```{r pg_hsapiens_exploris}
+pg_hsapiens_exploris <- pg_hsapiens %>% 
+  { .[str_detect(names(.), "Exploris480")] } %>% 
+  set_names( word(names(.), 3, sep = "/") )
+
+
+jaccard_hm(pg_hsapiens_exploris, "Exploris480 H sapiens | Pairwise Jaccard Index")
+
+jaccard_us(pg_hsapiens_exploris)
+```
+
+
+
+
+```{r pg_hsapiens_lumos}
+pg_hsapiens_lumos <- pg_hsapiens %>% 
+  { .[str_detect(names(.), "FusionLumos")] } %>% 
+  set_names( word(names(.), 3, sep = "/") )
+
+
+jaccard_hm(pg_hsapiens_lumos, "FusionLumos H sapiens | Pairwise Jaccard Index")
+
+jaccard_us(pg_hsapiens_lumos)
+```
+
+
+
+##### *Escherichia coli*
+
+
+```{r pg_ecoli_astral}
 pg_ecoli <- pg_list %>% 
   { .[str_detect(names(.), "Ecoli")] }
-
-
 
 
 pg_ecoli_astral <- pg_ecoli %>% 
   { .[str_detect(names(.), "Astral")] } %>% 
   set_names( word(names(.), 3, sep = "/") )
 
-pg_ecoli_astral %>% 
-  jpw() %>% 
-  as.matrix() %>% 
-  pheatmap(
-    cluster_rows       = TRUE,   # or TRUE if you want clustering
-    cluster_cols       = TRUE,
-    border_color       = NA,
-    color              = viridis(100),
-    na_col             = "grey90",
-    main               = "Astral E coli | Pairwise Index",
-    angle_col          = 45,
-    fontsize_row       = 10,
-    fontsize_col       = 10,
-    cellwidth          = 30,
-    cellheight         = 30
-  )
 
+jaccard_hm(pg_ecoli_astral, "Astral E coli | Pairwise Jaccard Index")
 
-pg_ecoli_astral %>% 
-  fromList() %>% 
-  upset(nsets = ncol(.),
-        order.by = "freq",
-        decreasing = TRUE,
-        nintersects = 10)
+jaccard_us(pg_ecoli_astral)
+```
 
 
 
 
-
+```{r pg_ecoli_exploris}
 pg_ecoli_exploris <- pg_ecoli %>% 
   { .[str_detect(names(.), "Exploris480")] } %>% 
   set_names( word(names(.), 3, sep = "/") )
 
+jaccard_hm(pg_ecoli_exploris, "Exploris480 E coli | Pairwise Jaccard Index")
 
-pg_ecoli_exploris %>% 
-  jpw() %>% 
-  as.matrix() %>% 
-  pheatmap(
-    cluster_rows       = TRUE,   # or TRUE if you want clustering
-    cluster_cols       = TRUE,
-    border_color       = NA,
-    color              = viridis(100),
-    na_col             = "grey90",
-    main               = "Exploris480 E coli | Pairwise Jaccard",
-    angle_col          = 45,
-    fontsize_row       = 10,
-    fontsize_col       = 10,
-    cellwidth          = 30,
-    cellheight         = 30
-  )
-
-
-pg_ecoli_astral %>% 
-  fromList() %>% 
-  upset(nsets = ncol(.),
-        order.by = "freq",
-        decreasing = TRUE,
-        nintersects = 10)
+jaccard_us(pg_ecoli_exploris)
+```
 
 
 
+
+```{r pg_ecoli_lumos}
 pg_ecoli_lumos <- pg_ecoli %>% 
   { .[str_detect(names(.), "FusionLumos")] } %>% 
    set_names( word(names(.), 3, sep = "/") )
 
+jaccard_hm(pg_ecoli_lumos, "FusionLumos E coli | Pairwise Jaccard Index")
+jaccard_us(pg_ecoli_lumos)
 
-pg_ecoli_lumos %>% 
-  jpw() %>% 
-  as.matrix() %>% 
-  pheatmap(
-    cluster_rows       = TRUE,   # or TRUE if you want clustering
-    cluster_cols       = TRUE,
-    border_color       = NA,
-    color              = viridis(100),
-    na_col             = "grey90",
-    main               = "FusionLumos E coli | Pairwise Jaccard",
-    angle_col          = 45,
-    fontsize_row       = 10,
-    fontsize_col       = 10,
-    cellwidth          = 30,
-    cellheight         = 30
+```
+
+
+#### Proteins
+
+
+
+##### *Homo sapiens*
+
+```{r prots_human_astral}
+prots_hsapiens <- proteins_list %>% 
+  { .[str_detect(names(.), "Hsapiens")] }
+
+
+prots_hsapiens_astral <- prots_hsapiens %>% 
+  { .[str_detect(names(.), "Astral")] } %>% 
+  set_names( word(names(.), 3, sep = "/") )
+
+
+jaccard_hm(prots_hsapiens_astral, "Astral H sapiens | Pairwise Jaccard Index of identified proteins")
+
+jaccard_us(prots_hsapiens_astral)
+```
+
+
+
+
+```{r prots_hsapiens_exploris}
+prots_hsapiens_exploris <- prots_hsapiens %>% 
+  { .[str_detect(names(.), "Exploris480")] } %>% 
+  set_names( word(names(.), 3, sep = "/") )
+
+
+jaccard_hm(prots_hsapiens_exploris, "Exploris480 H sapiens | Pairwise Jaccard Index")
+
+jaccard_us(prots_hsapiens_exploris)
+```
+
+
+
+
+```{r prots_hsapiens_lumos}
+prots_hsapiens_lumos <- prots_hsapiens %>% 
+  { .[str_detect(names(.), "FusionLumos")] } %>% 
+  set_names( word(names(.), 3, sep = "/") )
+
+
+jaccard_hm(prots_hsapiens_lumos, "FusionLumos H sapiens | Pairwise Jaccard Index")
+
+jaccard_us(prots_hsapiens_lumos)
+```
+
+
+
+##### *Escherichia coli*
+
+
+```{r prots_ecoli_astral}
+prots_ecoli <- pg_list %>% 
+  { .[str_detect(names(.), "Ecoli")] }
+
+
+prots_ecoli_astral <- prots_ecoli %>% 
+  { .[str_detect(names(.), "Astral")] } %>% 
+  set_names( word(names(.), 3, sep = "/") )
+
+
+jaccard_hm(prots_ecoli_astral, "Astral E coli | Pairwise Jaccard Index")
+
+jaccard_us(prots_ecoli_astral)
+```
+
+
+
+
+```{r prots_ecoli_exploris}
+prots_ecoli_exploris <- prots_ecoli %>% 
+  { .[str_detect(names(.), "Exploris480")] } %>% 
+  set_names( word(names(.), 3, sep = "/") )
+
+jaccard_hm(prots_ecoli_exploris, "Exploris480 E coli | Pairwise Jaccard Index")
+
+jaccard_us(prots_ecoli_exploris)
+```
+
+
+
+
+```{r prots_ecoli_lumos}
+prots_ecoli_lumos <- prots_ecoli %>% 
+  { .[str_detect(names(.), "FusionLumos")] } %>% 
+   set_names( word(names(.), 3, sep = "/") )
+
+jaccard_hm(prots_ecoli_lumos, "FusionLumos E coli | Pairwise Jaccard Index")
+
+jaccard_us(prots_ecoli_lumos)
+```
+
+
+
+#### Precursors
+
+
+
+##### *Homo sapiens*
+
+```{r pepts_hsapiens_astral}
+pepts_hsapiens <- peptides_list %>% 
+  { .[str_detect(names(.), "Hsapiens")] }
+
+
+pepts_hsapiens_astral <- pepts_hsapiens %>% 
+  { .[str_detect(names(.), "Astral")] } %>% 
+  set_names( word(names(.), 3, sep = "/") )
+
+
+jaccard_hm(pepts_hsapiens_astral, "Astral H sapiens | Pairwise Jaccard Index of identified precursors")
+
+jaccard_us(pepts_hsapiens_astral)
+```
+
+
+
+
+```{r pepts_hsapiens_exploris}
+pepts_hsapiens_exploris <- pepts_hsapiens %>% 
+  { .[str_detect(names(.), "Exploris480")] } %>% 
+  set_names( word(names(.), 3, sep = "/") )
+
+
+jaccard_hm(pepts_hsapiens_exploris, "Exploris480 H sapiens | Pairwise Jaccard Index")
+
+jaccard_us(pepts_hsapiens_exploris)
+```
+
+
+
+
+```{r pepts_hsapiens_lumos}
+pepts_hsapiens_lumos <- pepts_hsapiens %>% 
+  { .[str_detect(names(.), "FusionLumos")] } %>% 
+  set_names( word(names(.), 3, sep = "/") )
+
+
+jaccard_hm(pepts_hsapiens_lumos, "FusionLumos H sapiens | Pairwise Jaccard Index")
+
+jaccard_us(pepts_hsapiens_lumos)
+```
+
+
+
+
+
+##### *Escherichia coli*
+
+
+```{r pepts_ecoli_astral}
+pepts_ecoli <- peptides_list %>% 
+  { .[str_detect(names(.), "Ecoli")] }
+
+
+pepts_ecoli_astral <- pepts_ecoli %>% 
+  { .[str_detect(names(.), "Astral")] } %>% 
+  set_names( word(names(.), 3, sep = "/") )
+
+
+jaccard_hm(pepts_ecoli_astral, "Astral E coli | Pairwise Jaccard Index")
+
+jaccard_us(pepts_ecoli_astral)
+```
+
+
+
+
+```{r pepts_ecoli_exploris}
+pepts_ecoli_exploris <- pepts_ecoli %>% 
+  { .[str_detect(names(.), "Exploris480")] } %>% 
+  set_names( word(names(.), 3, sep = "/") )
+
+jaccard_hm(pepts_ecoli_exploris, "Exploris480 E coli | Pairwise Jaccard Index")
+
+jaccard_us(pepts_ecoli_exploris)
+```
+
+
+
+
+```{r pepts_ecoli_lumos}
+pepts_ecoli_lumos <- pepts_ecoli %>% 
+  { .[str_detect(names(.), "FusionLumos")] } %>% 
+   set_names( word(names(.), 3, sep = "/") )
+
+jaccard_hm(pepts_ecoli_lumos, "FusionLumos E coli | Pairwise Jaccard Index")
+
+jaccard_us(pepts_ecoli_lumos)
+```
+
+
+
+
+
+
+
+
+### Coefficient of variation
+
+
+```{r cv}
+## Function to compute cross validations
+compute_cv <- function(x) {
+  x %>% 
+    rowwise() %>% 
+    mutate(
+      cv = {
+        c_across(c(ends_with("mzML"), ends_with("raw"))) %>% 
+          log() %>% 
+          { sd(.)/mean(.) }
+      }
+    ) %>% 
+    ungroup()
+}
+
+## 
+
+
+#pr_matrixes_cleaned %<>% lapply(compute_cv)
+```
+
+
+
+
+```{r cvs_astral}
+## Gets the common peptides detected across all profiles
+common_peptds <- purrr::reduce(pepts_hsapiens_astral, intersect)
+
+## Gets data just from Astral and Human
+prs_hsapiens_astral <- pr_matrixes_cleaned %>% 
+  { .[str_detect(names(.), "Hsapiens")] } %>% 
+  { .[str_detect(names(.), "Astral")] } %>% 
+  ## Just common peptides
+  lapply(filter, Precursor.Id %in% common_peptds) %>% 
+  ## Compute cvs
+  lapply(compute_cv)
+  ## Compute mean
+  #lapply(compute_means)
+
+
+
+## Extracts cvs
+cvs <- prs_hsapiens_astral %>% 
+  ## Creates tibble with sources and all cv's
+  imap_dfr(
+    ~ tibble(
+      profile = .y,
+      cv     = .x$cv
+    )
+  ) %>% 
+  mutate(
+    ## Deletes unnecessary info
+    profile = word(profile, 3, sep = "/")
   )
 
-pg_ecoli_astral %>% 
-  fromList() %>% 
-  upset(nsets = ncol(.),
-        order.by = "freq",
-        decreasing = TRUE,
-        nintersects = 10)
 
+## Violin and boxplot
+ggplot(cvs, aes(x = profile, y = cv)) +
+  geom_violin(color = "gray",
+              fill = "#6CC24A",
+              alpha = 0.5) +
+  geom_boxplot(fill = "#18974C",
+               width = .25,
+               outlier.shape = NA) +
+  theme_minimal() +
+  scale_y_sqrt() +
+  theme(legend.position = "none",
+        axis.text.x = element_text(angle = 45,  hjust = 1, vjust = 1)) +
+  labs(
+    x = "Workflow",
+    y = "Coefficient of Variation",
+    title = "CV's across different workflows | Astral, H sapiens"
+  )
+
+
+## Just boxplot
+ggplot(cvs, aes(x = profile, y = cv)) +
+  geom_boxplot(fill = "#18974C",
+               width = .5,
+               outlier.shape = NA) +
+  ylim(0, 0.035) +
+  theme_minimal() +
+  theme(legend.position = "none",
+        axis.text.x = element_text(angle = 45, hjust = 1, vjust = 1)) +
+  labs(
+    x = "Workflow",
+    y = "Coefficient of Variation",
+    title = "CV's across different workflows | Astral, H sapiens"
+  ) 
+```
+
+### Intensities of unidentified precursors
+
+
+```{r ints_unid}
+### All with peptides identified with newer DIA-NN versions
+list_pepts_no_diann1_8 <- pepts_hsapiens_astral[c(
+  "diannv2.1",
+  "msconvert_diannv1.9.2",
+  "msconvert_diannv2.0",
+  "msconvert_diannv2.0.1",
+  "msconvert_diannv2.0.2",
+  "thermoraw_diannv1.9.2",
+  "thermoraw_diannv2.0",
+  "thermoraw_diannv2.0.1",
+  "thermoraw_diannv2.0.2"
+)]
+
+## Intersection off all sets
+pepts_no_diann1_8 <- Reduce(intersect, list_pepts_no_diann1_8)
+
+## Intersection of set of dia-nn 1.8
+pepts_diann1_8 <- c(
+  pepts_hsapiens_astral$msconvert_diannv1.8.1,
+  pepts_hsapiens_astral$thermoraw_diannv1.8.1
+)
+
+## Proteins identified by all versions but DIA-NN 1.8
+pepts_unid <- setdiff(pepts_no_diann1_8, pepts_diann1_8)
+
+
+## Flags if the precursor was identified by DIA-NN 1.8 or not in the precrusos matrix
+all_prs_mat <- pr_matrixes_cleaned %>% 
+  { .[str_detect(names(.), "Hsapiens")] } %>% 
+  { .[str_detect(names(.), "Astral")] } %>% 
+  map(
+  ~.x %>% 
+    mutate(is_unid = Precursor.Id %in% pepts_unid)
+)
+
+## Pivots everythin into a single object
+all_long <- map_dfr(
+  all_prs_mat,
+  ~ .x %>%
+    pivot_longer(
+      cols = c(ends_with("mzML"), ends_with("raw")),
+      names_to = "sample",
+      values_to = "intensity"
+    ),
+  .id = "tibble_id"
+)
+
+
+## Plots all densities of all samples together
+ggplot(all_long, aes(x = log(intensity),
+                     color = !(is_unid),
+                     group = interaction(sample, !(is_unid)))) +
+  geom_density(alpha = 0.7) +
+  theme_minimal() +
+  labs(
+    title = "Intensity densities of all Astral H. sapiens runs",
+    x = "log(Intensity)",
+    y = "Density",
+    color = "Identified by DIA-NN 1.8"
+  )
 
 
 ```
 
 
 
+### GO enrichment of unidentifed proteins
 
-```{r}
+
+```{r go_enrich}
+### All with proteins identified with newer DIA-NN versions
+list_prots_no_diann1_8 <- prots_hsapiens_astral[c(
+  "diannv2.1",
+  "msconvert_diannv1.9.2",
+  "msconvert_diannv2.0",
+  "msconvert_diannv2.0.1",
+  "msconvert_diannv2.0.2",
+  "thermoraw_diannv1.9.2",
+  "thermoraw_diannv2.0",
+  "thermoraw_diannv2.0.1",
+  "thermoraw_diannv2.0.2"
+)]
+
+#4 Intersection off all sets
+prots_no_diann1_8 <- Reduce(intersect, list_prots_no_diann1_8)
+
+## Union of set of dia-nn 1.8
+prots_diann1_8 <- c(
+  prots_hsapiens_astral$msconvert_diannv1.8.1,
+  prots_hsapiens_astral$thermoraw_diannv1.8.1
+)
+
+## Proteins identified by all versions but DIA-NN 1.8
+prots_unid <- setdiff(prots_no_diann1_8, prots_diann1_8)
+
+## All proteins identified with all versions
+all_prots <- unlist(prots_hsapiens_astral) %>% 
+  unique()
+
+
+## Mart
+mart <- useMart("ensembl", dataset = "hsapiens_gene_ensembl")
+
+
+## Convert ID's
+all_prots_ids <- getBM(
+  attributes = c("uniprotswissprot", "entrezgene_id"),
+  filters = "uniprotswissprot",
+  values = all_prots,
+  mart = mart
+) %>% 
+  pull("entrezgene_id") %>% 
+  as.character()
+
+interest_ids <- getBM(
+  attributes = c("uniprotswissprot", "entrezgene_id"),
+  filters = "uniprotswissprot",
+  values = prots_unid,
+  mart = mart
+) %>% 
+  pull("entrezgene_id") %>%
+  as.character()
+
+
+## GO Enrichment Analysis
+
+### Biological Process
+go_bp <- enrichGO(
+  gene = interest_ids,
+  universe = all_prots_ids,
+  OrgDb = org.Hs.eg.db,
+  ont = "BP",
+  pAdjustMethod = "BH",
+  pvalueCutoff = 0.05,
+  qvalueCutoff = 0.05,
+  readable = TRUE
+)
+
+### Molecular Function
+go_mf <- enrichGO(
+  gene = interest_ids,
+  universe = all_prots_ids,
+  OrgDb = org.Hs.eg.db,
+  ont = "MF",
+  pAdjustMethod = "BH",
+  pvalueCutoff = 0.05,
+  qvalueCutoff = 0.05,
+  readable = TRUE
+)
+
+### Cellular Component
+go_cc <- enrichGO(
+  gene = interest_ids,
+  universe = all_prots_ids,
+  OrgDb = org.Hs.eg.db,
+  ont = "CC",
+  pAdjustMethod = "BH",
+  pvalueCutoff = 0.05,
+  qvalueCutoff = 0.05,
+  readable = TRUE
+)
+
+
+
+## All ontologies
+go_all <- enrichGO(
+  gene = interest_ids,
+  universe = all_prots_ids,
+  OrgDb = org.Hs.eg.db,
+  ont = "ALL",
+  pAdjustMethod = "BH",
+  pvalueCutoff = 0.05,
+  qvalueCutoff = 0.05,
+  readable = TRUE
+)
+
+
+## Plots
+barplot(go_mf)
+
+dotplot(go_mf)
+
+```
+
+
+
+
+
+# Session Info
+
+```{r si}
 sessionInfo()
 ```
+
+
+
+
+
+
 
 
 
