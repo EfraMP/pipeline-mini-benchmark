@@ -1,25 +1,25 @@
 ---
-title: "Mini-benchmark"
+title: " Mini-benchamrking of a Nextlfow pipeline for MS-based proteomics"
 author: "Alejandro Efraín Marín Peralta"
 date: "`r Sys.Date()`"
 output:
-  html_document:
+  bookdown::html_document2:
+    code_folding: hide
     toc: true
     toc_float:
       toc_collapsed: true
-    toc_depth: 3
     number_sections: true
+    toc_depth: 3
+    fig_caption: true
     theme: lumen
-  pdf_document:
-    toc: true
-    toc_depth: '3'
+bibliography: ./cites/export.bib
+csl: ./cites/nature.csl
 ---
 
 
-# Benchamarking of a Nextlfow pipeline for MS-based proteomics
-
-
-```{r libraries, message=FALSE, warning=FALSE}
+```{r libraries, message=FALSE, warning=FALSE, include=FALSE}
+# Env set up
+## Libraries
 library(tidyverse)
 library(arrow)
 library(magrittr)
@@ -35,11 +35,7 @@ library(biomaRt)
 library(clusterProfiler)
 library(org.Hs.eg.db)
 
-
-set.seed(0)
-setwd("~/Documents/EMBL_UniHD/mini-benchmark")
-
-
+## Colors for organisms
 org_cols <- c(
   Ecoli    = "#007B53",
   Hsapiens = "#193F90"
@@ -47,73 +43,120 @@ org_cols <- c(
 
 ## Overwrites all functions
 select <- dplyr::select
+
+## Extra set uo
+set.seed(0)
+setwd("~/Documents/EMBL_UniHD/mini-benchmark")
+
+## Sources functions
+source("scripts/helpers.r")
 ```
 
 
+# Introduction
+ 
+**Proteomics** is the quantitative study of the proteome, *i. e.*, the whole set of proteins available in a biological sample @Sinha2020. **Mass spectrometry** (MS) is the current state-of-the-art method to do proteomics analyses @Shuken2023. MS consists of measuring the **mass-to-charge ratio** ($m/z$) of ions @Glish2003.  MS tends to be combined with high-performance liquid chromatography (HPLC)@Sinha2020. Thus, in liquid chromatography-mass spectrometry (LC-MS), ions tend to be identified based on both their chromatographic retention time and $m/z$. In the case of MS-based proteomics, the ions to be analyzed are ionized peptides generated from enzymatic digestion @Sinha2020. 
+
+Proteomics mass spectrometry consists of two steps. First, intact peptide ions (also called **precursors**) generate a first MS1 spectrum. Then a subset of them is subjected into **fragmentation**, generating a MS/MS spectrum. The fragmentation tends to break peptide bonds, thus the MS/MS aids into the identification of the peptide sequence @Shuken2023. 
+
+There are two main data acquisition and quantification strategies: data-dependent acquisition (DDA) and data-independent acquisition (DIA),@Sinha2020 as shown in Figure \@ref(fig:data-acq). With the DDA strategy, a precursor is selected from MS1 at a given retention time to go into MS/MS. On the other hand, with the DIA strategy, multiple precursors are selected from a $m/z$ window of a given retention time to go into MS/MS.
+
+
+```{r data-acq, echo=FALSE, fig.cap="Data acquisition strategies: DDA (A) and DIA (B). (Sinha & Mann, 2020)", fig.align='center', out.width='80%'}
+knitr::include_graphics("figures/dda_vs_dia.png")
+```
+
+
+The usage of DIA seems promising, as it allows the identification and quantification of peptide in an unbiased way @Frhlich2024. Besides, with the introduction of the new *Thermo Fisher Scientific Inc.*® instrument, the Orbitrap Astral mass spectrometer @Stewart2023, which is capable to quantify 5 times more peptides per unit time compared to other mass spectrometers compared to other DIA-based instruments @Heil2023, the area of proteomics seems to be advancing rapidly.
+
+Nevertheless, there a lot of challenges in the computational aspect of the proteomics field, such as the data size and complexity, the prevalence of closed source software and restrictive licenses, the lack of good documentation, the lack of standardization in proteomics software development and the lack of maintenance of open source software @Perez-Riverol2025. For example, the mass spectrometers raw output files are in proprietary, licensed, closed and binary formats @Martens2005. Given the restrictive-access nature of these files, an open standard was needed, which is why the mzML @Deutsch2008 file format was created.
+
+Another well-known problem in current science is the reproducibility crisis @Baker2016. Specifically, **computational reproducibility** is achieved when the same input data, code and software environment produce exactly the same output @Moreau2023. Nevertheless, this is not necessarily true across different computational platforms (i. e., different operating systems) due to intrinsic numerical instability @DITommaso2017. To address this issue, the use of containers is a popular solution in modern scientific computing @Moreau2023. Containers are a self-contained executable package isolated from the host system @Alser2024. Currently, the most used containerization technology is Docker @Merkel2014.
+
+On the other hand, bioinformatics analyses are complex, multi-step processes that require the use of multiple specialized software tools in a chained sequence @Davis-Turak2017. Besides the reproducibility issue previously discussed, there are more challenges that the field is facing such as: incompatibilities between software, manual software execution steps, high complexity and file size of omics data, among others @Wratten2021. To tackle these problems, Nextflow @DITommaso2017 was developed both as a scientific workflow management system and domain specific language (DSL).
+
+To assess this challenges, a Nextflow-based pipeline was to analyze both DDA and DIA proteomics data.
+The objective of this notebook is to benchmark the DIA-specific subworfklows (/@ref(fig:metromap)). The tools integrated into the subworkflow created to convert files from raw to mzML format were MSConvert @Chambers2012 and ThermoRawFileParser @Hulstaert2020. For DIA, DIA-NN @Demichev2020 processes and workflows were implemented. Docker images were built for all the DIA-NN versions available for Linux at the moment of the pipeline development (1.8.1, 1.9.1, 1.9.2, 2.0, 2.0.1, 2.0.2 and 2.1). Given incompatibilities across different DIA-NN versions, specific subworkflows for DIA-NN v1.8.1 and DIA-NN v2.1 were coded. Note that DIA-NN v2.1 accepts raw files as input, making the mzML conversion an unnecessary step. The DIA-NN steps are integrated as different Nextflow processes. In the end, the pipeline was built as modular as possible.
+
+
+```{r metromap, echo=FALSE, fig.cap="Pipeline DIA-NN subworkflows metromap", fig.align='center', out.width='90%'}
+knitr::include_graphics("figures/metromap.png")
+```
+
+
+DIA-NN is meant to be run in a multi-step pipeline following the next two steps:
+
+* *In silico* spectral library prediction given a FASTA file with protein sequences, DIA-NN predicts a spectral library, which is a set of spectra with annotated information such as retention time and *m/z*.
+* Analysis: DIA-NN analyze the raw data with the spectral library generated in the previous step.
+
+Custom Docker images were created individually for most of the pipeline processes; except for the MSConvert conversion (`proteowizard/pwiz-skyline-i-agree-to-the-vendor-licenses`) and the ThermoRawFileParser conversion (`quay.io/biocontainers/thermorawfileparser:1.4.5--h05cac1d_1`). 
+
+To benchmark the pipeline, samples from *Escherichia coli* and *Homo sapiens* were processed and measured by in three different mass spectrometer instruments: FusionLumos, Exploris480 and Astral. Three replicates were used per each combination (*i.e.* different mass spectrometers and the three species), yielding 18 different raw files. Different pipeline profiles were run considering the DIA-NN versions and raw file files processing strategies in a combinatorial way.
+
+To assess the computational efficiency of the pipeline runs, different metrics were considered and contrasted, such as the pipeline total runtime and the size of the input files.  In order to address the pipeline performance regarding biological metrics, the precursor identification and quantification results were measured.
 
 
 
-## Computing metrics
+# Computing insights
 
 
+```{r comp_functions, include=FALSE}
+# # Auxiliary functions to convert units
+# 
+# ## Function to convert units to MB
+# get_MB <- function(x) {
+#   ## Trim whitespace
+#   x %<>% as.character() %>% 
+#     trimws()
+#   
+#   ## Gets numeric value
+#   val <- str_extract(x, "[0-9]+(\\.[0-9]+)?") %>% 
+#     as.numeric()
+#   
+#   ## Gets unit
+#   unit <- str_extract(x, "[A-Za-z]+") %>% 
+#     toupper()
+#   
+#   ## Gets MB
+#   value_mb = case_when(
+#     unit %in% c("KB", "K")  ~ val / 1024,
+#     unit %in% c("MB", "M")  ~ val,
+#     unit %in% c("GB", "G") ~ val * 1024,
+#     unit %in% c("TB", "T") ~ val * 1024 * 1024,
+#     TRUE ~ NA_real_
+#   )
+#   
+#   ## Return megabytes
+#   return(value_mb)
+# }
+# 
+# 
+# ## Function to get time information into seconds
+# get_seconds <- function(x) {
+#   x %<>% as.character()
+#   
+#   ## Gets time with regex
+#   h <- x %>% 
+#     str_extract(., "\\d+(?=h)") %>% 
+#     as.numeric()
+#   m <- x %>% 
+#     str_extract(., "\\d+(?=m)") %>% 
+#     as.numeric()
+#   ## Regex to allow decimal seconds
+#   s <- x %>% 
+#     str_extract(., "\\d+(?:\\.\\d+)?(?=s)") %>% 
+#     as.numeric()
+#   
+#   # Replace NAa with 0
+#   h[is.na(h)] <- 0
+#   m[is.na(m)] <- 0
+#   s[is.na(s)] <- 0
+#   
+#   ## Return seconds
+#   return(h * 3600 + m * 60 + s)
+# }
 
 
-
-```{r comp_functions}
-# Auxiliary functions to convert units
-
-## Function to convert units to MB
-get_MB <- function(x) {
-  ## Trim whitespace
-  x %<>% as.character() %>% 
-    trimws()
-  
-  ## Gets numeric value
-  val <- str_extract(x, "[0-9]+(\\.[0-9]+)?") %>% 
-    as.numeric()
-  
-  ## Gets unit
-  unit <- str_extract(x, "[A-Za-z]+") %>% 
-    toupper()
-  
-  ## Gets MB
-  value_mb = case_when(
-    unit %in% c("KB", "K")  ~ val / 1024,
-    unit %in% c("MB", "M")  ~ val,
-    unit %in% c("GB", "G") ~ val * 1024,
-    unit %in% c("TB", "T") ~ val * 1024 * 1024,
-    TRUE ~ NA_real_
-  )
-  
-  ## Return megabytes
-  return(value_mb)
-}
-
-
-## Function to get time information into seconds
-get_seconds <- function(x) {
-  x %<>% as.character()
-  
-  ## Gets time with regex
-  h <- x %>% 
-    str_extract(., "\\d+(?=h)") %>% 
-    as.numeric()
-  m <- x %>% 
-    str_extract(., "\\d+(?=m)") %>% 
-    as.numeric()
-  ## Regex to allow decimal seconds
-  s <- x %>% 
-    str_extract(., "\\d+(?:\\.\\d+)?(?=s)") %>% 
-    as.numeric()
-  
-  # Replace NAa with 0
-  h[is.na(h)] <- 0
-  m[is.na(m)] <- 0
-  s[is.na(s)] <- 0
-  
-  ## Return seconds
-  return(h * 3600 + m * 60 + s)
-}
 ```
 
 
@@ -143,7 +186,7 @@ raw_info %<>% mutate(size_MB = get_MB(size)) %>%
 head(raw_info)
 
 
-
+### Plot
 ggplot(raw_info, aes(x = instrument, y = size_MB / 1024, colour = organism)) +
   geom_beeswarm(size = 2, alpha = 0.7) +
   scale_x_discrete(limits = c("FusionLumos", "Exploris480", "Astral")) +
@@ -159,6 +202,20 @@ ggplot(raw_info, aes(x = instrument, y = size_MB / 1024, colour = organism)) +
   ) +
   ggtitle("Size of raw files per experiment")
 
+
+
+
+### Median size by instrument
+raw_info %>% 
+  group_by(instrument) %>% 
+  summarise(median(size_MB / 1024))
+
+
+
+### Median size by organism
+raw_info %>% 
+  group_by(organism) %>% 
+  summarise(median(size_MB / 1024))
 
 
 ```
@@ -210,8 +267,7 @@ runtimes <- read_delim("runtimes.txt",
   select(!run) %>% 
   select(!string)
 
-
-
+### 
 runtimes %>% 
   filter(!str_detect(profile, "1\\.9\\.1")) %>% 
   ggplot() +
@@ -235,23 +291,18 @@ runtimes %>%
   )
 
 
+### Median runtime per instrument
+runtimes %>%
+  filter(!str_detect(profile, "1\\.9\\.1")) %>%
+  group_by(instrument) %>%
+  summarise(median(time))
 
-runtimes %>% 
-  filter(!str_detect(profile, "1\\.9\\.1")) %>% 
-  ggplot() +
-  geom_beeswarm(aes(y = time / 60, x = organism, colour = instrument),
-                size = 2,
-                alpha = 0.9,
-  ) +
-  geom_boxplot(aes(y = time / 60, x = organism),
-               width = .25, alpha = 0, 
-               outlier.shape = NA) +
-  scale_x_discrete(limits = c("Ecoli", "Hsapiens")) +
-  theme_minimal() +
-  labs(
-    x =  "Organism",
-    y = "Total runtime (h)"
-  )
+
+### Median runtime per organism
+runtimes %>%
+  filter(!str_detect(profile, "1\\.9\\.1")) %>%
+  group_by(organism) %>%
+  summarise(median(time))
 
 
 
@@ -270,21 +321,6 @@ size_time %>%
     name = "Organism",
     values = org_cols
   ) +
-  theme_minimal() +
-  labs(
-    x = "Average raw file size (GB)",
-    y = "Total runtime (h)",
-    title = "Runtime vs file size"
-  )
-
-
-
-size_time %>% 
-  filter(!str_detect(profile, "1\\.9\\.1")) %>% 
-  ggplot(aes(x = avg_raw_size, y = time /60 ,
-                        colour = instrument,
-                        shape = organism)) +
-  geom_point(size = 2, alpha = 0.8) +
   theme_minimal() +
   labs(
     x = "Average raw file size (GB)",
@@ -471,9 +507,9 @@ traces_times <- imap_dfr(traces_list, ~ {
 
 
 
-## Biological metrics
+# Biological insights
 
-### Quality Control
+## Quality Control
 
 ```{r qc_functions}
 ## Standard QC thresholds on DIA-NN reports
@@ -600,7 +636,7 @@ pr_matrixes_cleaned <- imap(
 
 
 
-### Detected biological entities
+## Detected biological entities
 
 ```{r bio_functions}
 # Functions to extract information from DIA-NN outputs
@@ -712,10 +748,10 @@ jaccard_us <- function(x) {
 ```
 
 
-#### Protein groups 
+### Protein groups 
 
 
-##### *Homo sapiens*
+#### *Homo sapiens*
 
 ```{r pg_human_astral}
 pg_hsapiens <- pg_list %>% 
@@ -762,7 +798,7 @@ jaccard_us(pg_hsapiens_lumos)
 
 
 
-##### *Escherichia coli*
+#### *Escherichia coli*
 
 
 ```{r pg_ecoli_astral}
@@ -807,11 +843,11 @@ jaccard_us(pg_ecoli_lumos)
 ```
 
 
-#### Proteins
+### Proteins
 
 
 
-##### *Homo sapiens*
+#### *Homo sapiens*
 
 ```{r prots_human_astral}
 prots_hsapiens <- proteins_list %>% 
@@ -858,7 +894,7 @@ jaccard_us(prots_hsapiens_lumos)
 
 
 
-##### *Escherichia coli*
+#### *Escherichia coli*
 
 
 ```{r prots_ecoli_astral}
@@ -904,11 +940,11 @@ jaccard_us(prots_ecoli_lumos)
 
 
 
-#### Precursors
+### Precursors
 
 
 
-##### *Homo sapiens*
+#### *Homo sapiens*
 
 ```{r pepts_hsapiens_astral}
 pepts_hsapiens <- peptides_list %>% 
@@ -957,7 +993,7 @@ jaccard_us(pepts_hsapiens_lumos)
 
 
 
-##### *Escherichia coli*
+#### *Escherichia coli*
 
 
 ```{r pepts_ecoli_astral}
@@ -1008,7 +1044,7 @@ jaccard_us(pepts_ecoli_lumos)
 
 
 
-### Coefficient of variation
+## Coefficient of variation
 
 
 ```{r cv}
@@ -1065,8 +1101,11 @@ cvs <- prs_hsapiens_astral %>%
     ## Deletes unnecessary info
     profile = word(profile, 3, sep = "/")
   )
+```
 
 
+
+```{r cv_plots}
 ## Violin and boxplot
 ggplot(cvs, aes(x = profile, y = cv)) +
   geom_violin(color = "gray",
@@ -1099,10 +1138,53 @@ ggplot(cvs, aes(x = profile, y = cv)) +
     x = "Workflow",
     y = "Coefficient of Variation",
     title = "CV's across different workflows | Astral, H sapiens"
-  ) 
+  )
+
+
+## Stats plots
+cvs %>%
+  group_by(profile) %>%
+  summarise(mean_cv = mean(cv)) %>%
+  ggplot(aes(x = reorder(profile, mean_cv), y = mean_cv)) +
+  geom_col(fill = "#18974C", color = "black") +
+  labs(title = "Mean CV per workflow",
+       x = "Profile",
+       y = "Mean CV") +
+  theme_minimal() +
+  theme(axis.text.x = element_text(angle = 45, hjust = 1, vjust = 1))
+
+
+cvs %>%
+  group_by(profile) %>%
+  summarise(median_cv = median(cv)) %>%
+  ggplot(aes(x = reorder(profile, median_cv), y = median_cv)) +
+  geom_col(fill = "#18974C", color = "black") +
+  labs(title = "Median CV per workflow",
+       x = "Profile",
+       y = "Median CV") +
+  theme_minimal() +
+  theme(axis.text.x = element_text(angle = 45, hjust = 1, vjust = 1))
+
+
+cvs %>%
+  group_by(profile) %>%
+  summarise(sd_cv = sd(cv)) %>%
+  ggplot(aes(x = reorder(profile, sd_cv), y = sd_cv)) +
+  geom_col(fill = "#18974C", color = "black") +
+  labs(title = "Standard Deviation CV per workflow",
+       x = "Profile",
+       y = "SD CV") +
+  theme_minimal() +
+  theme(axis.text.x = element_text(angle = 45, hjust = 1, vjust = 1))
+
 ```
 
-### Intensities of unidentified precursors
+
+
+
+
+
+## Intensities of unidentified precursors
 
 
 ```{r ints_unid}
@@ -1172,7 +1254,7 @@ ggplot(all_long, aes(x = log(intensity),
 
 
 
-### GO enrichment of unidentifed proteins
+## GO enrichment of unidentifed proteins
 
 
 ```{r go_enrich}
@@ -1300,14 +1382,10 @@ dotplot(go_mf)
 sessionInfo()
 ```
 
+# References
 
 
-
-
-
-
-
-
+<div id="refs"></div>
 
 
 
