@@ -34,6 +34,7 @@ library(diann)
 library(biomaRt)
 library(clusterProfiler)
 library(org.Hs.eg.db)
+library(kableExtra)
 
 ## Colors for organisms
 org_cols <- c(
@@ -47,10 +48,15 @@ select <- dplyr::select
 ## Extra set uo
 set.seed(0)
 setwd("~/Documents/EMBL_UniHD/mini-benchmark")
+if (!dir.exists("plots")) dir.create("plots")
+knitr::opts_knit$set(root.dir = "/Users/efra/Documents/EMBL_UniHD/mini-benchmark")
+
 
 ## Sources functions
-source("scripts/helpers.r")
+### For computational metrics
+source("scripts/comp_functions.r")
 ```
+
 
 
 # Introduction
@@ -76,7 +82,7 @@ Another well-known problem in current science is the reproducibility crisis @Bak
 On the other hand, bioinformatics analyses are complex, multi-step processes that require the use of multiple specialized software tools in a chained sequence @Davis-Turak2017. Besides the reproducibility issue previously discussed, there are more challenges that the field is facing such as: incompatibilities between software, manual software execution steps, high complexity and file size of omics data, among others @Wratten2021. To tackle these problems, Nextflow @DITommaso2017 was developed both as a scientific workflow management system and domain specific language (DSL).
 
 To assess this challenges, a Nextflow-based pipeline was to analyze both DDA and DIA proteomics data.
-The objective of this notebook is to benchmark the DIA-specific subworfklows (/@ref(fig:metromap)). The tools integrated into the subworkflow created to convert files from raw to mzML format were MSConvert @Chambers2012 and ThermoRawFileParser @Hulstaert2020. For DIA, DIA-NN @Demichev2020 processes and workflows were implemented. Docker images were built for all the DIA-NN versions available for Linux at the moment of the pipeline development (1.8.1, 1.9.1, 1.9.2, 2.0, 2.0.1, 2.0.2 and 2.1). Given incompatibilities across different DIA-NN versions, specific subworkflows for DIA-NN v1.8.1 and DIA-NN v2.1 were coded. Note that DIA-NN v2.1 accepts raw files as input, making the mzML conversion an unnecessary step. The DIA-NN steps are integrated as different Nextflow processes. In the end, the pipeline was built as modular as possible.
+The objective of this notebook is to benchmark the DIA-specific subworfklows (Figure \@ref(fig:metromap)). The tools integrated into the subworkflow created to convert files from raw to mzML format were MSConvert @Chambers2012 and ThermoRawFileParser @Hulstaert2020. For DIA, DIA-NN @Demichev2020 processes and workflows were implemented. Docker images were built for all the DIA-NN versions available for Linux at the moment of the pipeline development (1.8.1, 1.9.1, 1.9.2, 2.0, 2.0.1, 2.0.2 and 2.1). Given incompatibilities across different DIA-NN versions, specific subworkflows for DIA-NN v1.8.1 and DIA-NN v2.1 were coded. Note that DIA-NN v2.1 accepts raw files as input, making the mzML conversion an unnecessary step. The DIA-NN steps are integrated as different Nextflow processes. In the end, the pipeline was built as modular as possible.
 
 
 ```{r metromap, echo=FALSE, fig.cap="Pipeline DIA-NN subworkflows metromap", fig.align='center', out.width='90%'}
@@ -91,85 +97,23 @@ DIA-NN is meant to be run in a multi-step pipeline following the next two steps:
 
 Custom Docker images were created individually for most of the pipeline processes; except for the MSConvert conversion (`proteowizard/pwiz-skyline-i-agree-to-the-vendor-licenses`) and the ThermoRawFileParser conversion (`quay.io/biocontainers/thermorawfileparser:1.4.5--h05cac1d_1`). 
 
-To benchmark the pipeline, samples from *Escherichia coli* and *Homo sapiens* were processed and measured by in three different mass spectrometer instruments: FusionLumos, Exploris480 and Astral. Three replicates were used per each combination (*i.e.* different mass spectrometers and the three species), yielding 18 different raw files. Different pipeline profiles were run considering the DIA-NN versions and raw file files processing strategies in a combinatorial way.
+To benchmark the pipeline, samples from *Escherichia coli* and *Homo sapiens* were processed and measured by in three different mass spectrometer instruments: FusionLumos, Exploris480 and Astral. Three replicates were used per each combination (*i.e.* different mass spectrometers and the three species), yielding 18 different raw files. Different pipeline profiles were run considering the DIA-NN versions and raw file files processing strategies in a combinatorial way. 
 
 To assess the computational efficiency of the pipeline runs, different metrics were considered and contrasted, such as the pipeline total runtime and the size of the input files.  In order to address the pipeline performance regarding biological metrics, the precursor identification and quantification results were measured.
 
 
 
-# Computing insights
+# Computational  insights
 
-
-```{r comp_functions, include=FALSE}
-# # Auxiliary functions to convert units
-# 
-# ## Function to convert units to MB
-# get_MB <- function(x) {
-#   ## Trim whitespace
-#   x %<>% as.character() %>% 
-#     trimws()
-#   
-#   ## Gets numeric value
-#   val <- str_extract(x, "[0-9]+(\\.[0-9]+)?") %>% 
-#     as.numeric()
-#   
-#   ## Gets unit
-#   unit <- str_extract(x, "[A-Za-z]+") %>% 
-#     toupper()
-#   
-#   ## Gets MB
-#   value_mb = case_when(
-#     unit %in% c("KB", "K")  ~ val / 1024,
-#     unit %in% c("MB", "M")  ~ val,
-#     unit %in% c("GB", "G") ~ val * 1024,
-#     unit %in% c("TB", "T") ~ val * 1024 * 1024,
-#     TRUE ~ NA_real_
-#   )
-#   
-#   ## Return megabytes
-#   return(value_mb)
-# }
-# 
-# 
-# ## Function to get time information into seconds
-# get_seconds <- function(x) {
-#   x %<>% as.character()
-#   
-#   ## Gets time with regex
-#   h <- x %>% 
-#     str_extract(., "\\d+(?=h)") %>% 
-#     as.numeric()
-#   m <- x %>% 
-#     str_extract(., "\\d+(?=m)") %>% 
-#     as.numeric()
-#   ## Regex to allow decimal seconds
-#   s <- x %>% 
-#     str_extract(., "\\d+(?:\\.\\d+)?(?=s)") %>% 
-#     as.numeric()
-#   
-#   # Replace NAa with 0
-#   h[is.na(h)] <- 0
-#   m[is.na(m)] <- 0
-#   s[is.na(s)] <- 0
-#   
-#   ## Return seconds
-#   return(h * 3600 + m * 60 + s)
-# }
-
-
-```
-
-
-Gets metadata from server after running
+To assess the computational efficiency of the pipeline runs, different metrics were considered and contrasted, such as the pipeline total runtime and the size of the input files. Data, including file size, from server after running
 `ls -lh */*/data/*raw | tr -s ' ' '\t' > files_list.tsv` and then secure copying
-it to the local root.
+it to the local repo root. The units were converted to MB using custom functions.
 
-```{r raw_info, message=FALSE}
+
+```{r raw-info, message=FALSE}
+## Reads TSV
 raw_info <- read_tsv("./files_list.tsv",
                      col_names = FALSE)
-
-head(raw_info)
-
 
 ## Keeps just the necessary information
 raw_info %<>% dplyr::select(c("X5", "X9")) %>% 
@@ -183,9 +127,68 @@ raw_info %<>% mutate(size_MB = get_MB(size)) %>%
     sep = "/"
   )
 
-head(raw_info)
+raw_info %>% 
+  select(-file_name) %>% 
+  kbl(
+    caption = "Size of all raw files",
+  ) %>% 
+  kable_material(
+    c("striped", "hover"),
+    full_width = FALSE,
+    position = "center"
+  ) %>% 
+  scroll_box(
+    width = "80%",
+    height = "400px",
+    fixed_thead = TRUE
+  )
+```
 
 
+As shown in Table \@ref(tab:median-instrument), the Astral instrument produces larger raw files than the other two instruments: the median file size was 0.76 GB for the FusionLumos, 1.14 GB for the Exploris480 and 9.6 GB for the Astral. 
+
+
+```{r median-instrument, results='asis', fig.align='center', out.width='90%'}
+### Median size by instrument
+raw_info %>% 
+  group_by(instrument) %>% 
+  summarise(median(size_MB / 1024)) %>% 
+  kbl(
+    caption = "Median size by instrument",
+    digits = 2
+  ) %>% 
+  kable_material(
+    c("striped", "hover"),
+    full_width = FALSE,
+    position = "center"
+  )
+```
+
+
+Besides, statistics were computed per organism. The *E. coli* reference proteome (UP000000625) has 4,403 genes, while the *H. sapiens* (UP000005640) one has 20,598. As shown in Table \@ref(tab:median-organism), the median raw file size for *E. coli* was 0.777 GB, while for *H. sapiens* it was 1.5 GB, almost twice as large. 
+
+
+```{r median-organism, results='asis', fig.align='center', out.width='90%'}
+### Median size by organism
+raw_info %>% 
+  group_by(organism) %>% 
+  summarise(median(size_MB / 1024)) %>% 
+  kbl(
+    caption = "Median size by organism",
+    digits = 2
+  ) %>% 
+  kable_material(
+    c("striped", "hover"),
+    full_width = FALSE,
+    position = "center"
+  )
+```
+
+
+The Figure \@ref(fig:size-plot) shows the file of the sizes per instrument and organism.
+
+
+```{r size-plot, fig.cap="Size of raw files per experiment", fig.align='center', message=FALSE}
 ### Plot
 ggplot(raw_info, aes(x = instrument, y = size_MB / 1024, colour = organism)) +
   geom_beeswarm(size = 2, alpha = 0.7) +
@@ -201,61 +204,15 @@ ggplot(raw_info, aes(x = instrument, y = size_MB / 1024, colour = organism)) +
     y = "Raw file size (GB)"
   ) +
   ggtitle("Size of raw files per experiment")
-
-
-
-
-### Median size by instrument
-raw_info %>% 
-  group_by(instrument) %>% 
-  summarise(median(size_MB / 1024))
-
-
-
-### Median size by organism
-raw_info %>% 
-  group_by(organism) %>% 
-  summarise(median(size_MB / 1024))
-
-
 ```
 
 
-```{r summarize_raw}
-## Collapse into average size of raw files
-raw_summary <- raw_info %>%
-  group_by(instrument, organism) %>%
-  summarise(
-    avg_raw_size = mean(size_MB, na.rm = TRUE),
-    ## Cleans unnecessary metadata
-    .groups  = "drop"
-  ) %>% 
-  ## Converts back to GB
-  mutate(avg_raw_size = avg_raw_size / 1024)
-```
+To get the total runtimes, the [Nextflow workflow reports](https://www.nextflow.io/docs/latest/reports.html) were used. 
+Times were summarized after doing `grep -m1 'duration: <strong>' */*/*/nf_report.html > runtimes.txt`. As expected, the data from Astral takes longer to be analyzed (Table \@ref(tab:runtimes-instrument)).
 
 
-```{r fasta_info}
-fasta_info <- read_tsv("./fasta_list.tsv",
-                       col_names = FALSE)
-
-
-fasta_info
-
-## Filter out unnecessary columns
-fasta_info %<>% dplyr::select(c("X5", "X9")) %>% 
-  purrr::set_names(c("size", "fullname")) %>% 
-  mutate(size_MB = get_MB(size)) %>% 
-  ## Get organism name with regex
-  mutate(organism = str_extract(fullname, "(?<=/)[^/_]+(?=_)"))
-
-```
-
-
-
-Get times after doing `grep -m1 'duration: <strong>' */*/*/nf_report.html > runtimes.txt`
-
-```{r runtimes, message=FALSE}
+```{r runtimes-instrument, results='asis', fig.align='center', out.width='90%', message=FALSE, warning=FALSE}
+## File parsing
 runtimes <- read_delim("runtimes.txt",
                        delim =  "          ", ## By some reason grep created 10 whitespaces
                        col_names = FALSE) %>% 
@@ -267,7 +224,52 @@ runtimes <- read_delim("runtimes.txt",
   select(!run) %>% 
   select(!string)
 
-### 
+
+### Median runtime per instrument
+runtimes %>%
+  filter(!str_detect(profile, "1\\.9\\.1")) %>%
+  group_by(instrument) %>%
+  summarise(median(time)) %>%
+  kbl(
+    caption = "Median runtime per instrument",
+    digits = 2
+  ) %>% 
+  kable_material(
+    c("striped", "hover"),
+    full_width = FALSE,
+    position = "center"
+  )
+```
+
+
+Similarly, samples from *H. sapiens* also take longer (Table \@ref(tab:runtimes-instrument)).
+
+
+```{r runtimes-organism, results='asis', fig.align='center', out.width='90%'}
+### Median runtime per organism
+runtimes %>%
+  filter(!str_detect(profile, "1\\.9\\.1")) %>%
+  group_by(organism) %>%
+  summarise(median(time)) %>% 
+  kbl(
+    caption = "Median runtime per organism",
+    digits = 2
+  ) %>% 
+  kable_material(
+    c("striped", "hover"),
+    full_width = FALSE,
+    position = "center"
+  )
+```
+
+
+
+The Figure \@ref(fig:runtimes-plot) shows the total runtimes of the pipeline per instrument and organism.
+
+
+
+```{r runtimes-plot, message=FALSE, fig.cap="Total runtimes of the pipeline profiles across experiments", fig.align='center'}
+### Plot
 runtimes %>% 
   filter(!str_detect(profile, "1\\.9\\.1")) %>% 
   ggplot() +
@@ -289,26 +291,26 @@ runtimes %>%
     y = "Total runtime (h)",
     title = "Runtime per experiment"
   )
+```
 
 
-### Median runtime per instrument
-runtimes %>%
-  filter(!str_detect(profile, "1\\.9\\.1")) %>%
-  group_by(instrument) %>%
-  summarise(median(time))
+As expected, there is a correlation between the size of the raw files and the total runtime of the pipeline, although this does not seem to be a linear correlation. Indeed, the pattern seems to be exponential, although more data would be needed to confirm that assumption.
 
 
-### Median runtime per organism
-runtimes %>%
-  filter(!str_detect(profile, "1\\.9\\.1")) %>%
-  group_by(organism) %>%
-  summarise(median(time))
-
+```{r size-time, fig.cap="Pipeline runtimes vs size of raw files", fig.align='center', message=FALSE}
+raw_summary <- raw_info %>%
+  group_by(instrument, organism) %>%
+  summarise(
+    avg_raw_size = mean(size_MB, na.rm = TRUE),
+    ## Cleans unnecessary metadata
+    .groups  = "drop"
+  ) %>% 
+  ## Converts back to GB
+  mutate(avg_raw_size = avg_raw_size / 1024)
 
 
 size_time <- left_join(runtimes, raw_summary,
                        by = c("instrument", "organism"))
-
 
 
 size_time %>% 
@@ -327,72 +329,83 @@ size_time %>%
     y = "Total runtime (h)",
     title = "Runtime vs file size"
   )
-
-
-
-size_time %>%
-  filter(!str_detect(profile, "1\\.9\\.1")) %>% 
-  filter(instrument == "Astral") %>% 
-  ggplot(aes(x = avg_raw_size, y = time /60 ,
-             colour = organism)) +
-  geom_point(size = 2, alpha = 0.8) +
-  scale_colour_manual(
-    name = "Organism",
-    values = org_cols
-  ) +
-  theme_minimal() +
-  labs(
-    x = "Average raw file size (GB)",
-    y = "Total runtime (h)" 
-  ) +
-  ggtitle("Astral runs")
-
-
-
-size_time %>%
-  filter(!str_detect(profile, "1\\.9\\.1")) %>% 
-  filter(instrument == "Exploris480") %>% 
-  ggplot(aes(x = avg_raw_size, y = time /60 ,
-             colour = organism)) +
-  geom_point(size = 2, alpha = 0.8) +
-  scale_colour_manual(
-    name = "Organism",
-    values = org_cols
-  ) +
-  theme_minimal() +
-  labs(
-    x = "Average raw file size (GB)",
-    y = "Total runtime (h)" 
-  ) +
-  ggtitle("Exploris480 runs")
-
-
-
-size_time %>%
-  filter(!str_detect(profile, "1\\.9\\.1")) %>% 
-  filter(instrument == "FusionLumos") %>% 
-  ggplot(aes(x = avg_raw_size, y = time /60 ,
-             colour = organism)) +
-  geom_point(size = 2, alpha = 0.8) +
-  scale_colour_manual(
-    name = "Organism",
-    values = org_cols
-  ) +
-  theme_minimal() +
-  labs(
-    x = "Average raw file size (GB)",
-    y = "Total runtime (h)" 
-  ) +
-  ggtitle("FusionLumos runs")
-
-
 ```
 
 
 
+```{r runtimes-plots, message=FALSE}
+if (!dir.exists("plots/runtimes")) dir.create("plots/runtimes")
+
+(
+  size_time %>%
+    filter(!str_detect(profile, "1\\.9\\.1")) %>% 
+    filter(instrument == "Astral") %>% 
+    ggplot(aes(x = avg_raw_size, y = time /60 ,
+               colour = organism)) +
+    geom_point(size = 2, alpha = 0.8) +
+    scale_colour_manual(
+      name = "Organism",
+      values = org_cols
+    ) +
+    theme_minimal() +
+    labs(
+      x = "Average raw file size (GB)",
+      y = "Total runtime (h)" 
+    ) +
+    ggtitle("Astral runs")
+) %>% 
+  ggsave("plots/runtimes/astral_runs.png",. )
+  
+
+(
+  size_time %>%
+    filter(!str_detect(profile, "1\\.9\\.1")) %>% 
+    filter(instrument == "Exploris480") %>% 
+    ggplot(aes(x = avg_raw_size, y = time /60 ,
+               colour = organism)) +
+    geom_point(size = 2, alpha = 0.8) +
+    scale_colour_manual(
+      name = "Organism",
+      values = org_cols
+    ) +
+    theme_minimal() +
+    labs(
+      x = "Average raw file size (GB)",
+      y = "Total runtime (h)" 
+    ) +
+    ggtitle("Exploris480 runs")
+) %>% 
+  ggsave("plots/runtimes/exploris_runs.png",. )
+  
+  
+(
+  size_time %>%
+    filter(!str_detect(profile, "1\\.9\\.1")) %>% 
+    filter(instrument == "FusionLumos") %>% 
+    ggplot(aes(x = avg_raw_size, y = time /60 ,
+               colour = organism)) +
+    geom_point(size = 2, alpha = 0.8) +
+    scale_colour_manual(
+      name = "Organism",
+      values = org_cols
+    ) +
+    theme_minimal() +
+    labs(
+      x = "Average raw file size (GB)",
+      y = "Total runtime (h)" 
+    ) +
+    ggtitle("FusionLumos runs")
+) %>% 
+  ggsave("plots/runtimes/lumos_runs.png",. )
+```
 
 
-```{r deconv}
+Given the complexity of the data generated by the Astral instrument with the H. sapiens samples, further tests were conducted with the pipeline runs statistics on this data. As shown in Figure \@ref(fig:deconv), defining performance in terms of runtime, DIA-NN 2.1 outperforms all its predecessors, being the fastest version, whereas DIA-NN 1.8 seems to be an underperforming version. In other words, the pipeline using DIA-NN 2.1 is the fastest, while the one with DIA-NN 1.8 is the slowest. Similar patterns were observer across different intstruments and organisms.
+
+
+```{r deconv, message=FALSE, fig.cap="Pipeline total runtimes for H sapiens samples measured in Astral", fig.align='center'}
+if (!dir.exists("plots/runtimes_tool")) dir.create("plots/runtimes_tool")
+
 deconv_rt <- function(x, ms, org) {
   x %>% 
     filter(
@@ -418,92 +431,27 @@ deconv_rt <- function(x, ms, org) {
 }
 
 
-deconv_rt(size_time, "Astral", "Hsapiens") +
+ints <- c("Astral", "Exploris480", "FusionLumos")
+orgs <- c("Hsapiens", "Ecoli")
+
+
+
+for (ms in ints) {
+  for (org in orgs) {
+    p <- deconv_rt(size_time, ms, org) +
+         ylim(0, NA)
+    f <- file.path("plots/runtimes_tool", paste0(ms, "_", org, ".png"))
+    ggsave(filename = f, plot = p)
+  }
+}
+
+deconv_rt(size_time, "Astral", "Hsapiens")  +
   ylim(0, NA)
 
-
-deconv_rt(size_time, "Astral", "Ecoli")  +
-  ylim(0, NA)
-
 ```
 
 
 
-
-
-```{r read_traces, message=FALSE}
-## Gets names of the traces TSVs
-traces_files <- dir_ls(
-  path = ".",
-  recurse = TRUE,
-  glob = "*nf_trace.tsv"
-)
-
-## Reads all the trace files
-traces_list <- traces_files %>% 
-  purrr::set_names() %>% 
-  map(read_tsv)
-```
-
-
-
-```{r traces, warning=FALSE}
-## Using map because it is a list of tibbles
-traces_list %<>% map(
-  ~ mutate(
-    .x,
-    
-    ### Convert time metrics to seconds
-    duration_seconds = get_seconds(duration),
-    realtime_seconds = get_seconds(realtime),
-    
-    ### Convert memory metrics to MB
-    peak_rss_MB = get_MB(peak_rss),
-    peak_vmem_MB = get_MB(peak_vmem),
-    rchar_MB = get_MB(rchar),
-    wchar_MB = get_MB(wchar),
-    
-    ### Get CPU percentage
-    cpu_percentage = .x %>% 
-      pluck("%cpu") %>% 
-      str_remove("%") %>% 
-      as.numeric()
-  )
-)
-  
-
-## Adds metadata from the tibble name as column
-## Use imap() instead if map2() for simplicity
-traces_list %<>% imap(~ .x %>% 
-                        mutate(
-                          instrument = word(.y, 1, sep = "/"),
-                          organism = word(.y, 2, sep = "/"),
-                          profile = word(.y, 3, sep = "/")
-                        ))
-
-
-traces_list[1] %>% str()
-```
-
-
-summarize everything
-
-
-```{r traces_times}
-## Summarize total times per <instrument/organism/profile>
-traces_times <- imap_dfr(traces_list, ~ {
-  # split the list‐name (.y) into components
-  comb <- str_split(.y, "/", simplify = TRUE)
-  tibble(
-    instrument = comb[1],
-    organism = comb[2],
-    profile = comb[3],
-    ## Also convert to minutes
-    total_duration_min = sum(.x$duration_seconds, na.rm = TRUE) %>% { . / 60 },
-    total_realtime_min = sum(.x$realtime_seconds, na.rm = TRUE) %>% { . / 60 }
-  )
-})
-```
 
 
 
@@ -1256,6 +1204,8 @@ ggplot(all_long, aes(x = log(intensity),
 
 ## GO enrichment of unidentifed proteins
 
+Driven by curiosity, 
+
 
 ```{r go_enrich}
 ### All with proteins identified with newer DIA-NN versions
@@ -1271,7 +1221,7 @@ list_prots_no_diann1_8 <- prots_hsapiens_astral[c(
   "thermoraw_diannv2.0.2"
 )]
 
-#4 Intersection off all sets
+## Intersection off all sets
 prots_no_diann1_8 <- Reduce(intersect, list_prots_no_diann1_8)
 
 ## Union of set of dia-nn 1.8
